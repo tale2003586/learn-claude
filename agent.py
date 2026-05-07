@@ -1,183 +1,385 @@
-"""Tool definitions for the coding agent.
+"""Tool schemas for the team agent harness.
 
-Per agent-builder skill: Tools are the agent's HANDS.
-Each tool answers: "What can the agent DO?"
-
-Design principle (from skill): 
-  "Start with 3-5 capabilities. Add more only when the agent consistently
-   fails because a capability is missing."
-
-We have 5 core tools: bash, read_file, write_file, edit_file, todo
-Plus: task (subagent) for parent agent only - prevents infinite recursion.
+This file only describes what the model can call. The actual Python handlers
+live in tools.py and are selected by identity: lead vs teammate.
 """
 
-# =============================================================================
-# CORE TOOLS - Available to ALL agents (including subagents)
-# =============================================================================
 
-CHILD_TOOLS = [
-    {
+def function_tool(name: str, description: str, properties: dict,
+                  required: list = None) -> dict:
+    return {
         "type": "function",
         "function": {
-            "name": "bash",
-            "description": "Run a shell command. Use for: ls, find, grep, git, python, pip, cat, etc.",
+            "name": name,
+            "description": description,
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "The shell command to execute"
-                    }
-                },
-                "required": ["command"],
+                "properties": properties,
+                "required": required or [],
             },
         },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "read_file",
-            "description": "Read file contents. Returns UTF-8 text. Optionally limit lines.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Relative path to the file"
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Max lines to read (default: all)"
-                    },
-                },
-                "required": ["path"],
+    }
+
+
+BASE_TOOLS = [
+    function_tool(
+        "bash",
+        "Run a shell command. Use for quick commands like ls, rg, git, python, cat, etc.",
+        {
+            "command": {
+                "type": "string",
+                "description": "The shell command to execute.",
             },
         },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "write_file",
-            "description": "Write content to a file. Creates parent directories if needed.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Relative path for the file"
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "Content to write"
-                    },
-                },
-                "required": ["path", "content"],
+        ["command"],
+    ),
+    function_tool(
+        "read_file",
+        "Read UTF-8 file contents. Optionally limit the number of lines.",
+        {
+            "path": {
+                "type": "string",
+                "description": "Relative path to the file.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Max lines to read. If omitted, read the whole file.",
             },
         },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "edit_file",
-            "description": "Replace exact text in a file. Use for surgical edits - find exact old text and replace with new text.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Relative path to the file"
-                    },
-                    "old_text": {
-                        "type": "string",
-                        "description": "Exact text to find (must match precisely)"
-                    },
-                    "new_text": {
-                        "type": "string",
-                        "description": "Replacement text"
-                    },
-                },
-                "required": ["path", "old_text", "new_text"],
+        ["path"],
+    ),
+    function_tool(
+        "write_file",
+        "Write content to a file. Creates parent directories if needed.",
+        {
+            "path": {
+                "type": "string",
+                "description": "Relative path for the file.",
+            },
+            "content": {
+                "type": "string",
+                "description": "Content to write.",
             },
         },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "todo",
-            "description": "Update task list. Track progress on multi-step tasks. Only ONE task can be 'in_progress' at a time.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "items": {
-                        "type": "array",
-                        "description": "Complete list of all tasks with their current status",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "id": {
-                                    "type": "string",
-                                    "description": "Task identifier (e.g. '1', '2')"
-                                },
-                                "text": {
-                                    "type": "string",
-                                    "description": "Task description"
-                                },
-                                "status": {
-                                    "type": "string",
-                                    "enum": ["pending", "in_progress", "completed"],
-                                    "description": "pending=not started, in_progress=actively working, completed=done"
-                                },
-                            },
-                            "required": ["id", "text", "status"],
-                        },
-                    },
-                },
-                "required": ["items"],
+        ["path", "content"],
+    ),
+    function_tool(
+        "edit_file",
+        "Replace exact text in a file. Use for precise edits.",
+        {
+            "path": {
+                "type": "string",
+                "description": "Relative path to the file.",
+            },
+            "old_text": {
+                "type": "string",
+                "description": "Exact text to find.",
+            },
+            "new_text": {
+                "type": "string",
+                "description": "Replacement text.",
             },
         },
-    },
+        ["path", "old_text", "new_text"],
+    ),
 ]
 
-# =============================================================================
-# PARENT TOOLS - Only the root agent has Task (spawn subagents)
-# Subagents don't get Task to prevent infinite recursion
-# =============================================================================
 
-PARENT_TOOLS = CHILD_TOOLS + [
-    {
-        "type": "function",
-        "function": {
-            "name": "task",
-            "description": """Spawn a subagent for a focused subtask with FRESH context.
-Subagents run in ISOLATED context - they don't see parent's conversation history.
-Use this to keep the main conversation clean, especially for exploration.
-
-Agent types:
-- explore: Read-only agent for searching, analyzing, finding files. Never modifies anything.
-- code: Full-powered agent for implementing features and fixing bugs.
-- plan: Read-only agent for designing implementation strategies.
-
-Example: task("Explore the codebase to find auth-related files", "explore")
-""",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "prompt": {
-                        "type": "string",
-                        "description": "Detailed instructions for the subagent"
-                    },
-                    "description": {
-                        "type": "string",
-                        "description": "Short task name (3-5 words) for display"
-                    },
-                    "agent_type": {
-                        "type": "string",
-                        "enum": ["explore", "code", "plan"],
-                        "description": "Type of agent to spawn: explore(read-only search), code(full implementation), plan(read-only design)"
-                    },
-                },
-                "required": ["prompt"],
+SKILL_TOOLS = [
+    function_tool(
+        "load_skill",
+        "Load a specialized skill by name before tackling unfamiliar work.",
+        {
+            "name": {
+                "type": "string",
+                "description": "Skill name to load.",
             },
         },
-    },
+        ["name"],
+    ),
 ]
+
+
+TASK_TOOLS = [
+    function_tool(
+        "task_create",
+        "Create a persistent task in the task system.",
+        {
+            "subject": {
+                "type": "string",
+                "description": "Task title or short subject.",
+            },
+            "description": {
+                "type": "string",
+                "description": "Optional detailed task description.",
+            },
+        },
+        ["subject"],
+    ),
+    function_tool(
+        "task_update",
+        "Update a task's status or dependency blockers.",
+        {
+            "task_id": {
+                "type": "integer",
+                "description": "ID of the task to update.",
+            },
+            "status": {
+                "type": "string",
+                "enum": ["pending", "in_progress", "completed"],
+                "description": "New task status.",
+            },
+            "addBlockedBy": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "description": "Task IDs that this task should be blocked by.",
+            },
+            "removeBlockedBy": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "description": "Task IDs to remove from this task's blockers.",
+            },
+        },
+        ["task_id"],
+    ),
+    function_tool(
+        "task_list",
+        "List all persistent tasks with status summary.",
+        {},
+    ),
+    function_tool(
+        "task_get",
+        "Get full details of a task by ID.",
+        {
+            "task_id": {
+                "type": "integer",
+                "description": "ID of the task to inspect.",
+            },
+        },
+        ["task_id"],
+    ),
+]
+
+
+BACKGROUND_TOOLS = [
+    function_tool(
+        "background_run",
+        "Run a long shell command in a background thread. Returns a task_id immediately.",
+        {
+            "command": {
+                "type": "string",
+                "description": "The shell command to run in the background.",
+            },
+        },
+        ["command"],
+    ),
+    function_tool(
+        "check_background",
+        "Check background task status. Omit task_id to list all background tasks.",
+        {
+            "task_id": {
+                "type": "string",
+                "description": "Optional background task ID to inspect.",
+            },
+        },
+    ),
+]
+
+
+COMMUNICATION_TOOLS = [
+    function_tool(
+        "send_message",
+        "Send a message to another teammate's inbox.",
+        {
+            "to": {
+                "type": "string",
+                "description": "Recipient teammate name.",
+            },
+            "content": {
+                "type": "string",
+                "description": "Message content to send.",
+            },
+            "msg_type": {
+                "type": "string",
+                "enum": [
+                    "message",
+                    "broadcast",
+                    "shutdown_request",
+                    "shutdown_response",
+                    "plan_approval_request",
+                    "plan_approval_response",
+                ],
+                "description": "Message type. Defaults to message.",
+            },
+        },
+        ["to", "content"],
+    ),
+    function_tool(
+        "read_inbox",
+        "Read and drain your own inbox.",
+        {},
+    ),
+]
+
+
+TEAMMATE_PROTOCOL_TOOLS = [
+    function_tool(
+        "shutdown_response",
+        "Respond to a shutdown_request from the lead.",
+        {
+            "request_id": {
+                "type": "string",
+                "description": "Shutdown request ID from the inbox message.",
+            },
+            "approve": {
+                "type": "boolean",
+                "description": "True if shutdown is accepted, false if it cannot be completed.",
+            },
+            "details": {
+                "type": "string",
+                "description": "Optional explanation or final status details.",
+            },
+        },
+        ["request_id", "approve"],
+    ),
+    function_tool(
+        "plan_approval_request",
+        "Submit a plan to the lead for approval before major work.",
+        {
+            "plan": {
+                "type": "string",
+                "description": "Plan text to send to the lead for review.",
+            },
+        },
+        ["plan"],
+    ),
+]
+
+
+LEAD_ONLY_TOOLS = [
+    function_tool(
+        "task",
+        """Spawn a short-lived subagent for a focused subtask with fresh context.
+Use for bounded exploration or implementation work when a one-off result is enough.""",
+        {
+            "prompt": {
+                "type": "string",
+                "description": "Detailed instructions for the subagent.",
+            },
+            "description": {
+                "type": "string",
+                "description": "Short task name for display.",
+            },
+            "agent_type": {
+                "type": "string",
+                "enum": ["explore", "code", "plan"],
+                "description": "Subagent type.",
+            },
+        },
+        ["prompt"],
+    ),
+    function_tool(
+        "compact",
+        "Manually compress the conversation history into a continuity summary.",
+        {
+            "focus": {
+                "type": "string",
+                "description": "Optional focus: details to preserve in the summary.",
+            },
+        },
+    ),
+    function_tool(
+        "spawn_teammate",
+        "Spawn a persistent teammate that runs in its own thread and communicates through inbox messages.",
+        {
+            "name": {
+                "type": "string",
+                "description": "Unique teammate name, such as alice or tester.",
+            },
+            "role": {
+                "type": "string",
+                "description": "Teammate role, such as coder, tester, reviewer, researcher, or planner.",
+            },
+            "prompt": {
+                "type": "string",
+                "description": "Initial task instructions for the teammate.",
+            },
+        },
+        ["name", "role", "prompt"],
+    ),
+    function_tool(
+        "list_teammates",
+        "List all teammates with their names, roles, and current statuses.",
+        {},
+    ),
+    function_tool(
+        "broadcast",
+        "Broadcast a message from the lead to all teammates.",
+        {
+            "content": {
+                "type": "string",
+                "description": "Broadcast message content.",
+            },
+        },
+        ["content"],
+    ),
+    function_tool(
+        "shutdown_request",
+        "Ask a teammate to shut down gracefully and create a tracked shutdown request.",
+        {
+            "teammate": {
+                "type": "string",
+                "description": "Name of the teammate to ask to shut down.",
+            },
+        },
+        ["teammate"],
+    ),
+    function_tool(
+        "shutdown_status",
+        "Check the tracked status of a shutdown request by request_id.",
+        {
+            "request_id": {
+                "type": "string",
+                "description": "Shutdown request ID to inspect.",
+            },
+        },
+        ["request_id"],
+    ),
+    function_tool(
+        "plan_approval",
+        "Approve or reject a teammate's submitted plan.",
+        {
+            "request_id": {
+                "type": "string",
+                "description": "Plan approval request ID from the lead inbox.",
+            },
+            "approve": {
+                "type": "boolean",
+                "description": "True to approve the plan, false to reject it.",
+            },
+            "feedback": {
+                "type": "string",
+                "description": "Optional feedback to send back to the teammate.",
+            },
+        },
+        ["request_id", "approve"],
+    ),
+]
+
+
+# Team-oriented tool sets.
+TEAMMATE_TOOLS = (
+    BASE_TOOLS
+    + SKILL_TOOLS
+    + TASK_TOOLS
+    + BACKGROUND_TOOLS
+    + COMMUNICATION_TOOLS
+    + TEAMMATE_PROTOCOL_TOOLS
+)
+
+LEAD_TOOLS = TEAMMATE_TOOLS + LEAD_ONLY_TOOLS
+
+# Temporary compatibility aliases for older imports. Prefer TEAMMATE_TOOLS and
+# LEAD_TOOLS in new code.
+CHILD_TOOLS = TEAMMATE_TOOLS
+PARENT_TOOLS = LEAD_TOOLS

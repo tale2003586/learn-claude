@@ -19,6 +19,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+
+
+
+
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -34,15 +38,20 @@ try:
 except ImportError:
     pass
 
-from mytry.agent import CHILD_TOOLS, PARENT_TOOLS
-from mytry.config import MODEL, SYSTEM, client
-from mytry.subagent import run_subagent
-from mytry.tools import TOOL_HANDLERS
+from mytry.agent import LEAD_TOOLS, TEAMMATE_TOOLS
+from mytry.compact import auto_compact, estimate_tokens, mirco_compact
+from mytry.config import MODEL, SYSTEM, THRESHOLD, client
+from mytry.background_task import BG
+from mytry.message_bus import BUS
+from mytry.tools import make_lead_handlers
+from mytry.teammate import TEAM
 
 load_dotenv(override=True)
 
 os.environ["HTTPS_PROXY"] = "http://127.0.0.1:7897"
 os.environ["HTTP_PROXY"] = "http://127.0.0.1:7897"
+
+handlers = make_lead_handlers(TEAM)
 
 
 def message_text(message: dict) -> str:
@@ -64,7 +73,7 @@ def message_text(message: dict) -> str:
 def print_tool_output(name: str, output: str) -> None:
     """Print tool output with truncation for readability."""
     print(f"> {name}:")
-    limit = 4000 if name in ("task", "todo") else 1200
+    limit = 4000 if name in ("task") else 1200
     if len(output) <= limit:
         print(output)
     else:
@@ -78,15 +87,14 @@ def execute_tool_call(call) -> str:
         args = json.loads(call.function.arguments)
     except Exception as e:
         return f"Error parsing arguments for {call.function.name}: {e}"
+    # if call.function.name == "task":
+    #     desc = args.get("description", "subtask")
+    #     prompt = args.get("prompt", "")
+    #     agent_type = args.get("agent_type", "code")
+    #     print(f"> task ({desc}) [{agent_type}]: {prompt[:80]}")
+    #     return run_subagent(prompt, client, MODEL, TEAMMATE_TOOLS, agent_type)
 
-    if call.function.name == "task":
-        desc = args.get("description", "subtask")
-        prompt = args.get("prompt", "")
-        agent_type = args.get("agent_type", "code")
-        print(f"> task ({desc}) [{agent_type}]: {prompt[:80]}")
-        return run_subagent(prompt, client, MODEL, CHILD_TOOLS, agent_type)
-
-    handler = TOOL_HANDLERS.get(call.function.name)
+    handler = handlers.get(call.function.name)
     if not handler:
         return f"Unknown tool: {call.function.name}"
 
@@ -106,13 +114,29 @@ def agent_loop(messages: list) -> None:
         If act: tool executed, result added to context, loop continues
         If respond: answer returned, loop ends
     """
-    rounds_since_todo = 0
 
     while True:
+        mirco_compact(messages)
+
+        if estimate_tokens(messages) > THRESHOLD:
+            print("auto Compacting...")
+            messages[:] = auto_compact(messages)
+
+        notifs = BG.drain_notifications()
+
+        inbox = BUS.read_inbox("lead")
+        if inbox:
+            messages.append({"role": "user", "content": f"<inbox>\n{json.dumps(inbox, indent=2)}\n</inbox>"})
+
+        if notifs and messages:
+            notif_text = "\n".join(
+                f"[bg:{n['task_id']}] {n['status']}: {n['result']}" for n in notifs
+            )
+            messages.append({"role": "user", "content": f"<background-results>\n{notif_text}\n</background-results>"})
         response = client.chat.completions.create(
             model=MODEL,
             messages=[{"role": "system", "content": SYSTEM}, *messages],
-            tools=PARENT_TOOLS,
+            tools=LEAD_TOOLS,
             tool_choice="auto",
             max_tokens=8000,
         )
@@ -124,9 +148,13 @@ def agent_loop(messages: list) -> None:
         if not message.tool_calls:
             return
 
-        used_todo = False
+        manual_compact = False
         for call in message.tool_calls:
-            output = execute_tool_call(call)
+            if call.function.name == "compact":
+                manual_compact = True
+                output = "Manual compact requested."
+            else:
+                output = execute_tool_call(call)
             print_tool_output(call.function.name, output)
 
             messages.append({
@@ -135,16 +163,9 @@ def agent_loop(messages: list) -> None:
                 "content": output,
             })
 
-            if call.function.name == "todo":
-                used_todo = True
+        if manual_compact:
+            messages[:] = auto_compact(messages)
 
-        # Remind model to update todos if it's been a while
-        rounds_since_todo = 0 if used_todo else rounds_since_todo + 1
-        if rounds_since_todo >= 5:
-            messages.append({
-                "role": "user",
-                "content": "<reminder>Update your todos.</reminder>",
-            })
 
 
 def print_response(messages: list) -> None:

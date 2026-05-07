@@ -1,92 +1,56 @@
-"""Skills system - On-demand domain knowledge for the agent.
-
-Per agent-builder skill:
-  "Knowledge answers: What does the agent KNOW?"
-  "Design principle: Make knowledge available, not mandatory. 
-   Load it when relevant, not upfront."
-
-This enables Level 4 (Skills) of progressive complexity:
-  "Skills: On-demand knowledge | Domain expertise needed"
-
-Skills are Markdown files loaded on-demand when the agent needs domain expertise.
-"""
-
 from pathlib import Path
+import re
 
-SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
-
-
-def load_skill(name: str) -> str:
-    """Load a skill's SKILL.md content.
-    
-    Skills are loaded on-demand, not upfront.
-    This prevents context bloat.
-    
-    Args:
-        name: Skill name (directory name under skills/)
-    
-    Returns:
-        Skill content as text, or error message if not found.
-    """
-    skill_dir = SKILLS_DIR / name
-    skill_file = skill_dir / "SKILL.md"
-
-    if not skill_dir.exists():
-        # Try to find it via fuzzy match
-        for d in SKILLS_DIR.iterdir():
-            if d.is_dir() and (name.lower() in d.name.lower()):
-                skill_file = d / "SKILL.md"
-                if skill_file.exists():
-                    return skill_file.read_text()
-        return f"Error: Skill '{name}' not found. Available: {list_skills()}"
-
-    if not skill_file.exists():
-        return f"Error: SKILL.md not found in {skill_dir}"
-
-    return skill_file.read_text()
+import yaml
 
 
-def list_skills() -> str:
-    """List all available skills.
-    
-    Returns:
-        Formatted list of skill names and descriptions.
-    """
-    available = []
-    for d in sorted(SKILLS_DIR.iterdir()):
-        if d.is_dir():
-            skill_file = d / "SKILL.md"
-            if skill_file.exists():
-                content = skill_file.read_text()
-                # Try to extract description from frontmatter
-                desc = d.name
-                for line in content.splitlines():
-                    if line.startswith("description:"):
-                        desc = line.split(":", 1)[1].strip().strip('"')
-                        break
-                available.append(f"  - {d.name}: {desc}")
+class SkillLoader:
+    def __init__(self, skills_dir: Path):
+        self.skills_dir = skills_dir
+        self.skills = {}
+        self._load_all()
 
-    if not available:
-        return "No skills found."
+    def _load_all(self):
+        if not self.skills_dir.exists():
+            return
+        for f in sorted(self.skills_dir.rglob("SKILL.md")):
+            text = f.read_text()
+            meta, body = self._parse_frontmatter(text)
+            name = meta.get("name", f.parent.name)
+            self.skills[name] = {"meta": meta, "body": body, "path": str(f)}
 
-    return "Available skills:\n" + "\n".join(available)
+    def _parse_frontmatter(self, text: str) -> tuple:
+        """Parse YAML frontmatter between --- delimiters."""
+        match = re.match(r"^---\n(.*?)\n---\n(.*)", text, re.DOTALL)
+        if not match:
+            return {}, text
+        try:
+            meta = yaml.safe_load(match.group(1)) or {}
+        except yaml.YAMLError:
+            meta = {}
+        return meta, match.group(2).strip()
+
+    def get_descriptions(self) -> str:
+        """Layer 1: short descriptions for the system prompt."""
+        if not self.skills:
+            return "(no skills available)"
+        lines = []
+        for name, skill in self.skills.items():
+            desc = skill["meta"].get("description", "No description")
+            tags = skill["meta"].get("tags", "")
+            line = f"  - {name}: {desc}"
+            if tags:
+                line += f" [{tags}]"
+            lines.append(line)
+        return "\n".join(lines)
+
+    def get_content(self, name: str) -> str:
+        """Layer 2: full skill body returned in tool_result."""
+        skill = self.skills.get(name)
+        if not skill:
+            return f"Error: Unknown skill '{name}'. Available: {', '.join(self.skills.keys())}"
+        return f"<skill name=\"{name}\">\n{skill['body']}\n</skill>"
 
 
-# Skill tool definition for use in agent tools
-SKILL_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "load_skill",
-        "description": "Load domain expertise for a specific topic. Use when you need specialized knowledge about a domain.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string",
-                    "description": "Skill name to load"
-                },
-            },
-            "required": ["name"],
-        },
-    },
-}
+SKILLS_DIR = Path.cwd() / "skills"
+SKILL_LOADER = SkillLoader(SKILLS_DIR)

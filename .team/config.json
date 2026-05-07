@@ -1,0 +1,25 @@
+{
+  "team_name": "default",
+  "members": [
+    {
+      "name": "alice",
+      "role": "coder",
+      "status": "idle"
+    },
+    {
+      "name": "bob",
+      "role": "planner",
+      "status": "idle"
+    },
+    {
+      "name": "bob2",
+      "role": "planner",
+      "status": "idle"
+    },
+    {
+      "name": "charlie",
+      "role": "planner",
+      "status": "idle"
+    }
+  ]
+}
