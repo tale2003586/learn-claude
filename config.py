@@ -3,7 +3,7 @@ from pathlib import Path
 from openai import OpenAI
 from dotenv import load_dotenv
 
-from mytry.skills import SKILL_LOADER
+from skills import SKILL_LOADER
 
 load_dotenv(override=True)
 
@@ -18,7 +18,7 @@ client = OpenAI(
 )
 
 MODEL = "deepseek-v4-flash"
-WORKDIR = Path.cwd() / "mytry"
+WORKDIR = Path.cwd() 
 
 SKILLS_DIR = WORKDIR / "skills"
 

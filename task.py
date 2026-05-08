@@ -1,7 +1,8 @@
 import json
 from pathlib import Path
+import threading
 
-from mytry.config import TASKS_DIR
+from config import TASKS_DIR
 
 
 class TaskManager:
@@ -9,6 +10,8 @@ class TaskManager:
         self.dir = tasks_dir
         self.dir.mkdir(exist_ok=True)
         self._next_id = self._load_next_id()+1
+        self._claim_locker = threading.Lock()
+        
 
     def _load_next_id(self):
         ids = [int(f.stem.split("_")[1]) for f in self.dir.glob("task_*.json")]
@@ -75,5 +78,40 @@ class TaskManager:
             blocked = f" (blocked by: {t['blockedBy']})" if t.get("blockedBy") else ""
             lines.append(f"{marker} #{t['id']}: {t['subject']}{blocked}")
         return "\n".join(lines)
+    
+    def claim_task(self, task_id: int, owner: str) -> str:
+        with self._claim_locker:
+            path = self.dir / f"task_{task_id}.json"
+            if not path.exists():
+                return f"Error: Task {task_id} not found"
+            task = json.loads(path.read_text())
+            if task.get("owner"):
+                existing_owner = task.get("owner") or "someone else"
+                return f"Error: Task {task_id} has already been claimed by {existing_owner}"
+            if task.get("status") != "pending":
+                status = task.get("status")
+                return f"Error: Task {task_id} cannot be claimed because its status is '{status}'"
+            if task.get("blockedBy"):
+                return f"Error: Task {task_id} is blocked by other task(s) and cannot be claimed yet"
+            task["owner"] = owner
+            task["status"] = "in_progress"
+            path.write_text(json.dumps(task, indent=2))
+        return f"Claimed task #{task_id} for {owner}"
+    
+    def scan_unclaimed_tasks(self) -> list:
+        unclaimed = []
+        for f in self.dir.glob("task_*.json"):
+            task = json.loads(f.read_text())
+            if not task.get("owner") and task.get("status") == "pending" and not task.get("blockedBy"):
+                unclaimed.append(task)
+        return unclaimed
+    
+    def make_identity_block(name: str, role: str, team_name: str) -> dict:
+        return {
+            "role": "user",
+            "content": f"<identity>You are '{name}', role: {role}, team: {team_name}. Continue your work.</identity>",
+        }
+    
+
     
 TASKS = TaskManager(TASKS_DIR)

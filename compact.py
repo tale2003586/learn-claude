@@ -1,8 +1,8 @@
 import json
 import time
 
-from mytry.config import client, MODEL, WORKDIR
-from mytry.config import KEEP_RECENT, PRESERVE_RESULT_TOOLS, TRANSCRIPT_DIR
+from config import client, MODEL, WORKDIR
+from config import KEEP_RECENT, PRESERVE_RESULT_TOOLS, TRANSCRIPT_DIR
 
 
 def mirco_compact(messages:list) -> list:

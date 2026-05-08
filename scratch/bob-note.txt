@@ -1,0 +1,3 @@
+我是 Bob（coder 角色），这是我在 scratch 目录下的笔记文件。
+当前工作目录中包含 Python 项目代码、文档、测试、skills 等资源。
+我正在使用 Claude Code 的 agent 工具链进行协作开发。

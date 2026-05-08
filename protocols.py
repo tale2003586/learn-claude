@@ -3,7 +3,7 @@ import threading
 import time
 import uuid
 
-from mytry.message_bus import BUS
+from bus.team_bus import BUS
 class ProtocolManager:
     def __init__(self):
         self._lock = threading.Lock()

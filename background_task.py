@@ -2,7 +2,7 @@ import subprocess
 import threading
 import uuid
 
-from mytry.config import WORKDIR
+from config import WORKDIR
 
 
 
