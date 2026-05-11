@@ -1,7 +1,7 @@
 import asyncio
 from pathlib import Path
 
-from bootstrap import build_runtime
+from core.bootstrap import build_runtime
 
 
 async def print_cli_message(message) -> None:

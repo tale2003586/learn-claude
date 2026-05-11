@@ -1,0 +1,54 @@
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable
+
+from tools.executor import ToolHook
+
+
+@dataclass
+class ToolRegistration:
+    schema: dict
+    handler: Callable[..., str]
+    risk: str = "normal"
+    enabled_modes: set[str] | None = None
+    always_on: bool = False
+    source: str = "plugin"
+
+
+@dataclass
+class PluginContext:
+    workspace: Path
+    tool_registry: Any
+    sessions: Any = None
+    memory_store: Any = None
+
+
+@dataclass
+class TurnContext:
+    inbound: Any
+    session: Any
+
+
+@dataclass
+class TurnResult:
+    abort: bool = False
+    reply: str = ""
+
+
+class Plugin:
+    name: str = "plugin"
+
+    def setup(self, context: PluginContext) -> None:
+        self.context = context
+
+    def tools(self) -> list[ToolRegistration]:
+        return []
+
+    def tool_hooks(self) -> list[ToolHook]:
+        return []
+
+    def before_turn(self, context: TurnContext) -> TurnResult | None:
+        return None
+
+    def after_turn(self, context: TurnContext, reply: str) -> None:
+        return None

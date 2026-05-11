@@ -6,8 +6,8 @@ import time
 from tools.schema import TEAMMATE_TOOLS
 from config import MODEL, WORKDIR, client
 from bus.team_bus import BUS
-from task import TASKS
-from tools.tools import make_teammate_handlers
+from coding_runtime.task import TASKS
+from tools.handlers import make_teammate_handlers
 
 
 def execute_tool_call(call,handlers) -> str:

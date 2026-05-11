@@ -2,7 +2,10 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
+
+from sessions.session_store import SessionStore
 
 
 def _now_iso() -> str:
@@ -42,14 +45,34 @@ class Session:
 
 
 class SessionManager:
-    def __init__(self) -> None:
+    def __init__(self, db_path: str | Path | None = None) -> None:
         self._sessions: dict[str, Session] = {}
+        self._store = SessionStore(db_path or Path.cwd() / ".sessions" / "sessions.db")
 
     def get_or_create(self, session_id: str) -> Session:
         if session_id not in self._sessions:
-            self._sessions[session_id] = Session(id=session_id)
+            loaded = self._store.load_session(session_id)
+            if loaded is None:
+                self._sessions[session_id] = Session(id=session_id)
+            else:
+                self._sessions[session_id] = Session(
+                    id=loaded["id"],
+                    messages=loaded["messages"],
+                    current_mode=loaded["current_mode"],
+                    created_at=loaded["created_at"],
+                    updated_at=loaded["updated_at"],
+                    last_compacted=loaded["last_compacted"],
+                    metadata=loaded["metadata"],
+                )
         return self._sessions[session_id]
 
     def save(self, session: Session) -> None:
-        # Phase 1: memory only, no-op.
-        pass
+        session.touch()
+        self._sessions[session.id] = session
+        self._store.save_session(session)
+
+    def list_sessions(self) -> list[dict[str, Any]]:
+        return self._store.list_sessions()
+
+    def close(self) -> None:
+        self._store.close()

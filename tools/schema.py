@@ -1,7 +1,7 @@
 """Tool schemas for the team agent harness.
 
 This file only describes what the model can call. The actual Python handlers
-live in tools.py and are selected by identity: lead vs teammate.
+live in tools/handlers.py and are selected by identity: lead vs teammate.
 """
 
 
@@ -411,6 +411,26 @@ MEMORY_TOOLS = [
     ),
 ]
 
+SEARCH_TOOLS = [
+    function_tool(
+        "tool_search",
+        (
+            "Search available deferred tools or unlock one for this turn. "
+            "Use query='select:<tool_name>' to unlock a specific tool, such as select:bash."
+        ),
+        {
+            "query": {
+                "type": "string",
+                "description": (
+                    "Search text, or select:<tool_name> to unlock a deferred tool "
+                    "that is allowed in the current mode."
+                ),
+            },
+        },
+        ["query"],
+    ),
+]
+
 
 
 # Team-oriented tool sets.
@@ -423,7 +443,7 @@ TEAMMATE_TOOLS = (
     + TEAMMATE_PROTOCOL_TOOLS
 )
 
-LEAD_TOOLS = TEAMMATE_TOOLS + LEAD_ONLY_TOOLS + MEMORY_TOOLS
+LEAD_TOOLS = TEAMMATE_TOOLS + LEAD_ONLY_TOOLS + MEMORY_TOOLS + SEARCH_TOOLS
 
 # Temporary compatibility aliases for older imports. Prefer TEAMMATE_TOOLS and
 # LEAD_TOOLS in new code.

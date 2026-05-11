@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+
+.sessions/
+.task_sessions/
+.tasks/
+.team/
+.transcripts/
+
+.env

@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>百度一下，你就知道</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: Arial, 'Microsoft YaHei', sans-serif;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background: #fff;
+        }
+        .header {
+            width: 100%;
+            display: flex;
+            justify-content: flex-end;
+            padding: 20px 30px 0 0;
+            font-size: 13px;
+        }
+        .header a {
+            color: #333;
+            text-decoration: none;
+            margin-left: 22px;
+        }
+        .header a:hover { color: #00c; }
+        .header .login {
+            background: #4e6ef2;
+            color: #fff;
+            padding: 4px 14px;
+            border-radius: 6px;
+            font-size: 13px;
+            line-height: 28px;
+        }
+        .header .login:hover { background: #3b5de7; color: #fff; }
+        .main { margin-top: 10vh; text-align: center; }
+        .logo { width: 270px; margin-bottom: 28px; }
+        .search-box {
+            display: flex;
+            align-items: center;
+            width: 640px;
+            height: 44px;
+            border: 1px solid #b6b6b6;
+            border-radius: 22px;
+            margin: 0 auto;
+            overflow: hidden;
+            transition: box-shadow 0.2s;
+        }
+        .search-box:hover {
+            border-color: #a0a0a0;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+        .search-box:focus-within {
+            border-color: #4e6ef2;
+            box-shadow: 0 2px 10px rgba(78,110,242,0.18);
+        }
+        .search-box input {
+            flex: 1;
+            border: none;
+            outline: none;
+            padding: 0 20px;
+            font-size: 16px;
+            height: 100%;
+        }
+        .search-box .camera {
+            width: 36px;
+            height: 36px;
+            cursor: pointer;
+            fill: #999;
+            margin-right: 4px;
+        }
+        .search-box .camera:hover { fill: #4e6ef2; }
+        .search-box .btn {
+            width: 48px;
+            height: 44px;
+            background: #4e6ef2;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .search-box .btn:hover { background: #3b5de7; }
+        .search-box .btn svg { fill: #fff; width: 20px; height: 20px; }
+        .shortcuts {
+            margin-top: 30px;
+            display: flex;
+            justify-content: center;
+            gap: 24px;
+        }
+        .shortcuts .item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-decoration: none;
+            color: #333;
+            font-size: 13px;
+            gap: 6px;
+        }
+        .shortcuts .item:hover .icon { background: #f0f0f0; }
+        .shortcuts .icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 14px;
+            background: #f5f5f5;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+        }
+        .footer {
+            position: fixed;
+            bottom: 20px;
+            font-size: 12px;
+            color: #999;
+        }
+        .footer a { color: #999; text-decoration: none; margin: 0 8px; }
+        .footer a:hover { color: #333; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <a href="#">新闻</a>
+        <a href="#">hao123</a>
+        <a href="#">地图</a>
+        <a href="#">直播</a>
+        <a href="#">图片</a>
+        <a href="#">视频</a>
+        <a href="#">贴吧</a>
+        <a href="#">学术</a>
+        <a href="#">更多</a>
+        <a href="#" class="login">登录</a>
+    </div>
+
+    <div class="main">
+        <div class="logo">
+            <svg viewBox="0 0 270 90" xmlns="http://www.w3.org/2000/svg">
+                <text x="8" y="68" font-size="64" font-weight="bold" font-family="Arial,sans-serif" fill="#4e6ef2">百</text>
+                <text x="75" y="68" font-size="64" font-weight="bold" font-family="Arial,sans-serif" fill="#4e6ef2">度</text>
+                <text x="148" y="68" font-size="64" font-weight="300" font-family="Arial,sans-serif" fill="#333">一</text>
+                <text x="195" y="68" font-size="64" font-weight="300" font-family="Arial,sans-serif" fill="#333">下</text>
+            </svg>
+        </div>
+
+        <div class="search-box">
+            <input type="text" placeholder="请输入关键词">
+            <svg class="camera" viewBox="0 0 24 24">
+                <path d="M12 9a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7zm7.5-3h-2.26l-.88-1.32A2 2 0 0 0 14.62 4H9.38a2 2 0 0 0-1.74 1L6.76 6H4.5A2.5 2.5 0 0 0 2 8.5v9A2.5 2.5 0 0 0 4.5 20h15a2.5 2.5 0 0 0 2.5-2.5v-9A2.5 2.5 0 0 0 19.5 6zM12 17.5a4 4 0 1 1 0-8 4 4 0 0 1 0 8z"/>
+            </svg>
+            <button class="btn" aria-label="搜索">
+                <svg viewBox="0 0 24 24">
+                    <path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 0 0 1.48-5.34C15.22 5.64 12.14 3 8.5 3S1.78 5.64.5 9.36c-1.28 3.72 1.22 7.54 4.96 8.72a6.5 6.5 0 0 0 5.34-1.48l.27.28v.79l4.25 4.25c.41.41 1.08.41 1.49 0l.99-.99c.41-.41.41-1.08 0-1.49L15.5 14zm-6 0C7.01 14 5.01 12 5 9.5 4.99 7 7 5 9.5 5S14 7 14 9.5 12 14 9.5 14z"/>
+                </svg>
+            </button>
+        </div>
+
+        <div class="shortcuts">
+            <a href="#" class="item">
+                <div class="icon">📄</div>
+                <span>百度文库</span>
+            </a>
+            <a href="#" class="item">
+                <div class="icon">🎵</div>
+                <span>百度音乐</span>
+            </a>
+            <a href="#" class="item">
+                <div class="icon">📺</div>
+                <span>百度视频</span>
+            </a>
+            <a href="#" class="item">
+                <div class="icon">🛒</div>
+                <span>百度购物</span>
+            </a>
+            <a href="#" class="item">
+                <div class="icon">🗺️</div>
+                <span>百度地图</span>
+            </a>
+        </div>
+    </div>
+
+    <div class="footer">
+        <a href="#">关于百度</a>
+        <a href="#">About Baidu</a>
+        <a href="#">使用百度前必读</a>
+        <a href="#">帮助中心</a>
+        <span>| 京ICP证030173号</span>
+    </div>
+</body>
+</html>

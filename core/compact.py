@@ -5,7 +5,7 @@ from config import client, MODEL, WORKDIR
 from config import KEEP_RECENT, PRESERVE_RESULT_TOOLS, TRANSCRIPT_DIR
 
 
-def mirco_compact(messages:list) -> list:
+def micro_compact(messages: list) -> list:
     """Compact message history by summarizing older messages.
     
     - Keeps the last 6 messages in full detail.
@@ -44,7 +44,7 @@ def mirco_compact(messages:list) -> list:
 
 def auto_compact(messages:list) -> list:
     """Automatically compact messages if token count exceeds threshold."""
-    # This is a placeholder. In practice, you'd calculate token count and call mirco_compact as needed.
+    # This is a placeholder. In practice, you'd calculate token count and call micro_compact as needed.
     TRANSCRIPT_DIR.mkdir(exist_ok=True)
     transcript_path = TRANSCRIPT_DIR / f"transcript_{int(time.time())}.jsonl"
     with open(transcript_path, "w") as f:
@@ -77,3 +77,7 @@ def auto_compact(messages:list) -> list:
 def estimate_tokens(messages: list) -> int:
     """Rough token count: ~4 chars per token."""
     return len(str(messages)) // 4
+
+
+# Compatibility alias for older imports.
+mirco_compact = micro_compact

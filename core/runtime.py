@@ -1,9 +1,9 @@
 import asyncio
 from dataclasses import dataclass, field
 
-from agent_loop import AgentLoop
 from bus.events import InboundMessage
 from bus.user_bus import MessageBus
+from core.agent_loop import AgentLoop
 
 
 @dataclass

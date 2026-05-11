@@ -4,13 +4,13 @@ from pathlib import Path
 import subprocess
 
 
-from background_task import BG
+from coding_runtime.background_task import BG
 from config import WORKDIR
 from bus.team_bus import BUS
 from memory.store import MemoryStore
-from protocols import PROTOCOLS
-from skills import SKILL_LOADER
-from task import TASKS
+from coding_runtime.protocols import PROTOCOLS
+from skill_runtime import SKILL_LOADER
+from coding_runtime.task import TASKS
 
 
 def safe_path(p: str) -> Path:
@@ -199,4 +199,3 @@ MEMORY_HANDLERS = {
     ),
     "recall_memory": lambda **kw: MEMORY.recall(kw.get("query")),
 }
-

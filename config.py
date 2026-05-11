@@ -3,7 +3,7 @@ from pathlib import Path
 from openai import OpenAI
 from dotenv import load_dotenv
 
-from skills import SKILL_LOADER
+from skill_runtime import SKILL_LOADER
 
 load_dotenv(override=True)
 
