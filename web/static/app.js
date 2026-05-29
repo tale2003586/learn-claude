@@ -8,12 +8,15 @@ const state = {
   sessionFilter: "",
   sidebarPanel: localStorage.getItem("sidebarPanel") || "sessions",
   sidebarCollapsed: localStorage.getItem("sidebarCollapsed") === "1",
+  mobileSidebarOpen: false,
   currentMode: "hybrid",
 };
 
 const els = {
   appShell: document.querySelector(".app-shell"),
   sidebarToggle: document.querySelector("#sidebarToggle"),
+  sidebarOverlay: document.querySelector("#sidebarOverlay"),
+  mobileSidebarOpen: document.querySelector("#mobileSidebarOpen"),
   sidebarTabs: [...document.querySelectorAll("[data-sidebar-tab]")],
   sidebarPanels: [...document.querySelectorAll("[data-sidebar-panel]")],
   workspaceLabel: document.querySelector("#workspaceLabel"),
@@ -75,12 +78,38 @@ function setSidebarPanel(panelName) {
   }
 }
 
+function isMobileViewport() {
+  return window.matchMedia("(max-width: 860px)").matches;
+}
+
+function setMobileSidebarOpen(value) {
+  state.mobileSidebarOpen = value;
+  els.appShell.classList.toggle("is-sidebar-open", value);
+  document.body.classList.toggle("no-scroll", value);
+  els.mobileSidebarOpen.setAttribute("aria-expanded", value ? "true" : "false");
+  els.sidebarToggle.textContent = value && isMobileViewport() ? "×" : "‹";
+  if (isMobileViewport()) {
+    els.sidebarToggle.title = value ? "关闭侧栏" : "折叠侧栏";
+    els.sidebarToggle.setAttribute("aria-label", value ? "关闭侧栏" : "折叠侧栏");
+  }
+}
+
 function setSidebarCollapsed(value) {
   state.sidebarCollapsed = value;
   localStorage.setItem("sidebarCollapsed", value ? "1" : "0");
-  els.appShell.classList.toggle("is-collapsed", value);
+  els.appShell.classList.toggle("is-collapsed", !isMobileViewport() && value);
   els.sidebarToggle.title = value ? "展开侧栏" : "折叠侧栏";
   els.sidebarToggle.setAttribute("aria-label", value ? "展开侧栏" : "折叠侧栏");
+}
+
+function syncResponsiveSidebar() {
+  if (isMobileViewport()) {
+    els.appShell.classList.remove("is-collapsed");
+    setMobileSidebarOpen(false);
+    return;
+  }
+  setMobileSidebarOpen(false);
+  els.appShell.classList.toggle("is-collapsed", state.sidebarCollapsed);
 }
 
 function updateMetrics(session = {}) {
@@ -186,6 +215,9 @@ function renderSessions(sessions = state.sessions) {
       state.rawSession = !isWeb;
       state.sessionId = label;
       loadSession(label, !isWeb);
+      if (isMobileViewport()) {
+        setMobileSidebarOpen(false);
+      }
     });
     els.sessionsList.append(button);
   }
@@ -357,6 +389,12 @@ els.input.addEventListener("keydown", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && state.mobileSidebarOpen) {
+    event.preventDefault();
+    setMobileSidebarOpen(false);
+    return;
+  }
+
   const modifier = event.ctrlKey || event.metaKey;
   if (!modifier || event.altKey || event.shiftKey) return;
 
@@ -368,7 +406,11 @@ document.addEventListener("keydown", (event) => {
 
   if (event.key.toLowerCase() === "b") {
     event.preventDefault();
-    setSidebarCollapsed(!state.sidebarCollapsed);
+    if (isMobileViewport()) {
+      setMobileSidebarOpen(!state.mobileSidebarOpen);
+    } else {
+      setSidebarCollapsed(!state.sidebarCollapsed);
+    }
     return;
   }
 
@@ -399,8 +441,22 @@ els.sessionSearch.addEventListener("input", () => {
 });
 
 els.sidebarToggle.addEventListener("click", () => {
-  setSidebarCollapsed(!state.sidebarCollapsed);
+  if (isMobileViewport()) {
+    setMobileSidebarOpen(false);
+  } else {
+    setSidebarCollapsed(!state.sidebarCollapsed);
+  }
 });
+
+els.mobileSidebarOpen.addEventListener("click", () => {
+  setMobileSidebarOpen(true);
+});
+
+els.sidebarOverlay.addEventListener("click", () => {
+  setMobileSidebarOpen(false);
+});
+
+window.addEventListener("resize", syncResponsiveSidebar);
 
 els.newSessionBtn.addEventListener("click", newSession);
 els.refreshMemoryBtn.addEventListener("click", loadMemory);
@@ -408,6 +464,7 @@ els.refreshMemoryBtn.addEventListener("click", loadMemory);
 async function init() {
   setSidebarPanel(state.sidebarPanel);
   setSidebarCollapsed(state.sidebarCollapsed);
+  syncResponsiveSidebar();
   await loadHealth();
   await Promise.all([loadSessions(), loadMemory()]);
   await loadSession("default", false);

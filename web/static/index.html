@@ -77,12 +77,16 @@
           </section>
         </div>
       </aside>
+      <button id="sidebarOverlay" class="sidebar-overlay" type="button" aria-label="关闭侧栏"></button>
 
       <section class="chat-pane">
         <header class="chat-header">
-          <div>
-            <p class="eyebrow">当前会话</p>
-            <h2 id="sessionTitle">default</h2>
+          <div class="chat-title-row">
+            <button id="mobileSidebarOpen" class="mobile-sidebar-button" type="button" aria-label="打开侧栏" aria-controls="sidebar" aria-expanded="false">☰</button>
+            <div>
+              <p class="eyebrow">当前会话</p>
+              <h2 id="sessionTitle">default</h2>
+            </div>
           </div>
           <div class="mode-actions" aria-label="模式切换">
             <button data-command="/hybrid" type="button">Hybrid</button>

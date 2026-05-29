@@ -38,6 +38,10 @@ body {
   color: var(--text);
 }
 
+body.no-scroll {
+  overflow: hidden;
+}
+
 button,
 input,
 textarea {
@@ -63,6 +67,10 @@ button {
 
 .app-shell.is-collapsed {
   grid-template-columns: 72px minmax(0, 1fr);
+}
+
+.sidebar-overlay {
+  display: none;
 }
 
 .sidebar,
@@ -446,6 +454,17 @@ button {
   min-width: 0;
 }
 
+.chat-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.mobile-sidebar-button {
+  display: none;
+}
+
 .chat-header {
   min-height: 76px;
   padding: 16px 20px;
@@ -618,38 +637,125 @@ button {
 
 @media (max-width: 860px) {
   body {
-    overflow: auto;
+    overflow: hidden;
   }
 
   .app-shell {
-    grid-template-columns: 1fr;
-    grid-template-rows: minmax(240px, 38dvh) minmax(0, 62dvh);
+    display: block;
     min-height: 100dvh;
-    height: auto;
+    height: 100dvh;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 40;
+    width: min(86vw, 340px);
+    height: 100dvh;
+    border-radius: 0 12px 12px 0;
+    transform: translateX(-105%);
+    transition: transform 180ms ease;
+  }
+
+  .app-shell.is-sidebar-open .sidebar {
+    transform: translateX(0);
+  }
+
+  .sidebar-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    opacity: 0;
+    pointer-events: none;
+    background: rgba(24, 34, 45, 0.38);
+    transition: opacity 180ms ease;
+  }
+
+  .app-shell.is-sidebar-open .sidebar-overlay {
+    opacity: 1;
+    pointer-events: auto;
   }
 
   .app-shell.is-collapsed {
     grid-template-columns: 1fr;
-    grid-template-rows: 62px minmax(0, calc(100dvh - 86px));
   }
 
-  .sidebar,
+  .app-shell.is-collapsed .brand-copy,
+  .app-shell.is-collapsed .status-badge {
+    display: block;
+  }
+
+  .app-shell.is-collapsed .status-badge {
+    display: inline-flex;
+  }
+
+  .app-shell.is-collapsed .sidebar-tabs {
+    display: grid;
+  }
+
+  .app-shell.is-collapsed .sidebar-content {
+    display: block;
+  }
+
+  .app-shell.is-collapsed .sidebar {
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+
+  .app-shell.is-collapsed .sidebar-top {
+    grid-template-columns: minmax(0, 1fr) 34px;
+    justify-items: stretch;
+    padding: 14px;
+    border-bottom: 1px solid var(--border);
+  }
+
   .chat-pane {
+    width: 100%;
+    height: 100dvh;
     min-height: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
   }
 
   .chat-header {
-    align-items: flex-start;
+    align-items: stretch;
     flex-direction: column;
+    gap: 10px;
+    min-height: 0;
+    padding: 12px;
   }
 
   .chat-header h2 {
     max-width: 100%;
+    font-size: 18px;
+  }
+
+  .mobile-sidebar-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 38px;
+    min-height: 38px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    background: var(--surface-soft);
+    font-size: 20px;
   }
 
   .mode-actions {
     width: 100%;
+    flex-wrap: nowrap;
     justify-content: flex-start;
+    overflow-x: auto;
+  }
+
+  .mode-actions button {
+    flex: 0 0 auto;
   }
 
   .messages {
@@ -662,5 +768,18 @@ button {
 
   .activity-grid {
     grid-template-columns: 1fr;
+  }
+
+  .composer-dock {
+    padding: 10px;
+  }
+
+  .composer {
+    padding: 10px;
+  }
+
+  .composer textarea {
+    min-height: 76px;
+    max-height: 34dvh;
   }
 }
