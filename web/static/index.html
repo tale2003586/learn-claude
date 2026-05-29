@@ -9,31 +9,73 @@
   </head>
   <body>
     <main class="app-shell">
-      <aside class="sidebar">
-        <header class="brand-row">
-          <div>
-            <h1>Agent Console</h1>
-            <p id="workspaceLabel">workspace</p>
+      <aside id="sidebar" class="sidebar">
+        <header class="sidebar-top">
+          <div class="brand-row">
+            <div class="brand-copy">
+              <h1>Agent Console</h1>
+              <p id="workspaceLabel">workspace</p>
+            </div>
+            <span id="statusBadge" class="status-badge">启动中</span>
           </div>
-          <span id="statusBadge" class="status-badge">启动中</span>
+          <button id="sidebarToggle" class="sidebar-toggle" type="button" title="折叠侧栏" aria-label="折叠侧栏">‹</button>
         </header>
 
-        <section class="panel sessions-panel">
-          <div class="panel-head">
-            <h2>会话</h2>
-            <button id="newSessionBtn" class="icon-button" type="button" title="新会话" aria-label="新会话">+</button>
-          </div>
-          <div id="sessionsList" class="sessions-list"></div>
-        </section>
+        <nav class="sidebar-tabs" aria-label="侧栏视图">
+          <button class="active" data-sidebar-tab="sessions" type="button">会话</button>
+          <button data-sidebar-tab="memory" type="button">记忆</button>
+          <button data-sidebar-tab="activity" type="button">状态</button>
+        </nav>
 
-        <section class="panel memory-panel">
-          <div class="panel-head">
-            <h2>记忆</h2>
-            <button id="refreshMemoryBtn" class="text-button" type="button">刷新</button>
-          </div>
-          <div id="memoryTabs" class="memory-tabs"></div>
-          <pre id="memoryContent" class="memory-content"></pre>
-        </section>
+        <div class="sidebar-content">
+          <section class="sidebar-panel active" data-sidebar-panel="sessions">
+            <div class="panel-head">
+              <h2>会话</h2>
+              <button id="newSessionBtn" class="icon-button" type="button" title="新会话" aria-label="新会话">+</button>
+            </div>
+            <div class="filter-row">
+              <input id="sessionSearch" type="search" placeholder="搜索会话">
+            </div>
+            <div id="sessionsList" class="sessions-list"></div>
+          </section>
+
+          <section class="sidebar-panel" data-sidebar-panel="memory">
+            <div class="panel-head">
+              <h2>记忆</h2>
+              <button id="refreshMemoryBtn" class="text-button" type="button">刷新</button>
+            </div>
+            <div id="memoryTabs" class="memory-tabs"></div>
+            <pre id="memoryContent" class="memory-content"></pre>
+          </section>
+
+          <section class="sidebar-panel" data-sidebar-panel="activity">
+            <div class="panel-head">
+              <h2>状态</h2>
+            </div>
+            <div class="activity-grid">
+              <div class="activity-item">
+                <span>当前会话</span>
+                <strong id="activeSessionMetric">default</strong>
+              </div>
+              <div class="activity-item">
+                <span>模式</span>
+                <strong id="modeMetric">hybrid</strong>
+              </div>
+              <div class="activity-item">
+                <span>会话数</span>
+                <strong id="sessionCountMetric">0</strong>
+              </div>
+              <div class="activity-item">
+                <span>记忆文件</span>
+                <strong id="memoryCountMetric">0</strong>
+              </div>
+            </div>
+            <div class="workspace-card">
+              <span>Workspace</span>
+              <p id="workspacePath">-</p>
+            </div>
+          </section>
+        </div>
       </aside>
 
       <section class="chat-pane">
@@ -49,15 +91,19 @@
           </div>
         </header>
 
-        <div id="messages" class="messages" aria-live="polite"></div>
+        <div id="chatScroll" class="chat-scroll">
+          <div id="messages" class="messages" aria-live="polite"></div>
+        </div>
 
-        <form id="composer" class="composer">
-          <textarea id="messageInput" rows="3" placeholder="输入消息"></textarea>
-          <div class="composer-actions">
-            <span id="composerState"></span>
-            <button id="sendBtn" type="submit">发送</button>
-          </div>
-        </form>
+        <div class="composer-dock">
+          <form id="composer" class="composer">
+            <textarea id="messageInput" rows="3" placeholder="输入消息"></textarea>
+            <div class="composer-actions">
+              <span id="composerState"></span>
+              <button id="sendBtn" type="submit">发送</button>
+            </div>
+          </form>
+        </div>
       </section>
     </main>
   </body>

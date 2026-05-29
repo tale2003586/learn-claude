@@ -1,0 +1,13 @@
+.git
+.venv
+__pycache__
+*.py[cod]
+.env
+.sessions
+.task_sessions
+.tasks
+.team
+.transcripts
+.agents
+.codex
+.vscode

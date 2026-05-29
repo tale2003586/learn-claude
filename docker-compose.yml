@@ -1,0 +1,16 @@
+services:
+  agent-console:
+    build: .
+    container_name: agent-console
+    restart: unless-stopped
+    env_file:
+      - ${AGENT_CONSOLE_ENV_FILE:-.env}
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./memory:/app/memory
+      - ./.sessions:/app/.sessions
+      - ./.task_sessions:/app/.task_sessions
+      - ./.tasks:/app/.tasks
+      - ./.team:/app/.team
+      - ./.transcripts:/app/.transcripts

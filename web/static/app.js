@@ -2,25 +2,41 @@ const state = {
   sessionId: "default",
   rawSession: false,
   busy: false,
+  sessions: [],
   memoryFiles: [],
   activeMemory: "MEMORY.md",
+  sessionFilter: "",
+  sidebarPanel: localStorage.getItem("sidebarPanel") || "sessions",
+  sidebarCollapsed: localStorage.getItem("sidebarCollapsed") === "1",
+  currentMode: "hybrid",
 };
 
 const els = {
+  appShell: document.querySelector(".app-shell"),
+  sidebarToggle: document.querySelector("#sidebarToggle"),
+  sidebarTabs: [...document.querySelectorAll("[data-sidebar-tab]")],
+  sidebarPanels: [...document.querySelectorAll("[data-sidebar-panel]")],
   workspaceLabel: document.querySelector("#workspaceLabel"),
+  workspacePath: document.querySelector("#workspacePath"),
   statusBadge: document.querySelector("#statusBadge"),
   sessionsList: document.querySelector("#sessionsList"),
+  sessionSearch: document.querySelector("#sessionSearch"),
   newSessionBtn: document.querySelector("#newSessionBtn"),
   refreshMemoryBtn: document.querySelector("#refreshMemoryBtn"),
   memoryTabs: document.querySelector("#memoryTabs"),
   memoryContent: document.querySelector("#memoryContent"),
   sessionTitle: document.querySelector("#sessionTitle"),
+  chatScroll: document.querySelector("#chatScroll"),
   messages: document.querySelector("#messages"),
   composer: document.querySelector("#composer"),
   input: document.querySelector("#messageInput"),
   sendBtn: document.querySelector("#sendBtn"),
   composerState: document.querySelector("#composerState"),
   modeActions: document.querySelector(".mode-actions"),
+  activeSessionMetric: document.querySelector("#activeSessionMetric"),
+  modeMetric: document.querySelector("#modeMetric"),
+  sessionCountMetric: document.querySelector("#sessionCountMetric"),
+  memoryCountMetric: document.querySelector("#memoryCountMetric"),
 };
 
 async function fetchJson(url, options = {}) {
@@ -47,6 +63,35 @@ function setBusy(value) {
   els.composerState.textContent = value ? "思考中" : state.rawSession ? "只读会话" : "";
 }
 
+function setSidebarPanel(panelName) {
+  state.sidebarPanel = panelName;
+  localStorage.setItem("sidebarPanel", panelName);
+
+  for (const tab of els.sidebarTabs) {
+    tab.classList.toggle("active", tab.dataset.sidebarTab === panelName);
+  }
+  for (const panel of els.sidebarPanels) {
+    panel.classList.toggle("active", panel.dataset.sidebarPanel === panelName);
+  }
+}
+
+function setSidebarCollapsed(value) {
+  state.sidebarCollapsed = value;
+  localStorage.setItem("sidebarCollapsed", value ? "1" : "0");
+  els.appShell.classList.toggle("is-collapsed", value);
+  els.sidebarToggle.title = value ? "展开侧栏" : "折叠侧栏";
+  els.sidebarToggle.setAttribute("aria-label", value ? "展开侧栏" : "折叠侧栏");
+}
+
+function updateMetrics(session = {}) {
+  const mode = session.current_mode || state.currentMode || "hybrid";
+  state.currentMode = mode;
+  els.activeSessionMetric.textContent = state.sessionId || "default";
+  els.modeMetric.textContent = mode;
+  els.sessionCountMetric.textContent = String(state.sessions.length);
+  els.memoryCountMetric.textContent = String(state.memoryFiles.length);
+}
+
 function messageText(message) {
   const content = message?.content ?? "";
   if (typeof content === "string") return content;
@@ -69,6 +114,10 @@ function roleLabel(role) {
     system: "System",
   };
   return labels[role] || role || "message";
+}
+
+function scrollMessagesToBottom() {
+  els.chatScroll.scrollTop = els.chatScroll.scrollHeight;
 }
 
 function renderMessages(messages) {
@@ -97,17 +146,23 @@ function renderMessages(messages) {
     item.append(role, body);
     els.messages.append(item);
   }
-  els.messages.scrollTop = els.messages.scrollHeight;
+  scrollMessagesToBottom();
 }
 
-function renderSessions(sessions) {
+function renderSessions(sessions = state.sessions) {
   els.sessionsList.innerHTML = "";
-  const rows = sessions || [];
+  const filter = state.sessionFilter.trim().toLowerCase();
+  const rows = (sessions || []).filter((session) => {
+    const label = session.channel === "web" ? session.chat_id : session.id;
+    return !filter || `${label} ${session.current_mode || ""}`.toLowerCase().includes(filter);
+  });
+
   if (rows.length === 0) {
     const empty = document.createElement("div");
     empty.className = "empty-state";
-    empty.textContent = "暂无会话";
+    empty.textContent = filter ? "没有匹配会话" : "暂无会话";
     els.sessionsList.append(empty);
+    updateMetrics();
     return;
   }
 
@@ -129,11 +184,12 @@ function renderSessions(sessions) {
     button.append(name, meta);
     button.addEventListener("click", () => {
       state.rawSession = !isWeb;
-      state.sessionId = isWeb ? session.chat_id : session.id;
-      loadSession(isWeb ? session.chat_id : session.id, !isWeb);
+      state.sessionId = label;
+      loadSession(label, !isWeb);
     });
     els.sessionsList.append(button);
   }
+  updateMetrics();
 }
 
 function renderMemory() {
@@ -153,6 +209,7 @@ function renderMemory() {
   const active = state.memoryFiles.find((file) => file.name === state.activeMemory)
     || state.memoryFiles[0];
   els.memoryContent.textContent = active?.content || "";
+  updateMetrics();
 }
 
 function formatDate(value) {
@@ -171,27 +228,34 @@ async function loadHealth() {
   try {
     const data = await fetchJson("/api/health");
     els.workspaceLabel.textContent = data.workspace;
+    els.workspacePath.textContent = data.workspace;
     setStatus("就绪", "ready");
   } catch (error) {
     setStatus("异常", "error");
     els.workspaceLabel.textContent = error.message;
+    els.workspacePath.textContent = error.message;
   }
 }
 
 async function loadSessions() {
   const data = await fetchJson("/api/sessions");
-  renderSessions(data.sessions);
+  state.sessions = data.sessions || [];
+  renderSessions();
 }
 
 async function loadSession(sessionId = state.sessionId, raw = state.rawSession) {
   const data = await fetchJson(
     `/api/session?session_id=${encodeURIComponent(sessionId)}&raw=${raw ? "1" : "0"}`,
   );
-  state.sessionId = data.session.chat_id || sessionId;
-  state.rawSession = raw || data.session.channel !== "web";
+  const session = data.session || {};
+  const channel = session.channel || (session.id?.startsWith("web:") ? "web" : "");
+  state.sessionId = session.chat_id || sessionId;
+  state.rawSession = raw || (channel !== "web" && channel !== "");
+  state.currentMode = session.current_mode || "hybrid";
   els.sessionTitle.textContent = state.sessionId;
+  updateMetrics(session);
   setBusy(false);
-  renderMessages(data.session.messages || []);
+  renderMessages(session.messages || []);
   await loadSessions();
 }
 
@@ -206,9 +270,7 @@ async function loadMemory() {
 
 async function sendMessage(message) {
   setBusy(true);
-  const currentMessages = [...els.messages.querySelectorAll(".message")];
-  if (currentMessages.length === 0 || els.messages.querySelector(".empty-state")) {
-    renderMessages([]);
+  if (!els.messages.querySelector(".message") || els.messages.querySelector(".empty-state")) {
     els.messages.innerHTML = "";
   }
   renderOptimisticUserMessage(message);
@@ -222,12 +284,14 @@ async function sendMessage(message) {
       }),
     });
     const savedMessages = data.session?.messages || [];
+    state.currentMode = data.session?.current_mode || state.currentMode;
     renderMessages(savedMessages.length > 0
       ? savedMessages
       : [
         { role: "user", content: message },
         { role: "assistant", content: data.reply },
       ]);
+    updateMetrics(data.session || {});
     await loadSessions();
   } catch (error) {
     renderMessages([
@@ -262,15 +326,18 @@ function renderOptimisticUserMessage(message) {
 
   item.append(role, body);
   els.messages.append(item);
-  els.messages.scrollTop = els.messages.scrollHeight;
+  scrollMessagesToBottom();
 }
 
 function newSession() {
   state.sessionId = `web-${Date.now().toString(36)}`;
   state.rawSession = false;
+  state.currentMode = "hybrid";
   els.sessionTitle.textContent = state.sessionId;
   renderMessages([]);
+  updateMetrics({ current_mode: "hybrid" });
   setBusy(false);
+  setSidebarPanel("sessions");
   loadSessions();
   els.input.focus();
 }
@@ -299,6 +366,12 @@ document.addEventListener("keydown", (event) => {
     return;
   }
 
+  if (event.key.toLowerCase() === "b") {
+    event.preventDefault();
+    setSidebarCollapsed(!state.sidebarCollapsed);
+    return;
+  }
+
   const modeCommands = {
     "1": "/hybrid",
     "2": "/chat",
@@ -316,10 +389,25 @@ els.modeActions.addEventListener("click", (event) => {
   sendMessage(command);
 });
 
+els.sidebarTabs.forEach((tab) => {
+  tab.addEventListener("click", () => setSidebarPanel(tab.dataset.sidebarTab));
+});
+
+els.sessionSearch.addEventListener("input", () => {
+  state.sessionFilter = els.sessionSearch.value;
+  renderSessions();
+});
+
+els.sidebarToggle.addEventListener("click", () => {
+  setSidebarCollapsed(!state.sidebarCollapsed);
+});
+
 els.newSessionBtn.addEventListener("click", newSession);
 els.refreshMemoryBtn.addEventListener("click", loadMemory);
 
 async function init() {
+  setSidebarPanel(state.sidebarPanel);
+  setSidebarCollapsed(state.sidebarCollapsed);
   await loadHealth();
   await Promise.all([loadSessions(), loadMemory()]);
   await loadSession("default", false);
@@ -328,4 +416,5 @@ async function init() {
 init().catch((error) => {
   setStatus("异常", "error");
   els.workspaceLabel.textContent = error.message;
+  els.workspacePath.textContent = error.message;
 });

@@ -36,6 +36,22 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
+def load_env_file(path: Path) -> None:
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        os.environ.setdefault(key, value)
+
+
+load_env_file(ROOT / ".env")
+
+
 class AgentService:
     """Owns the async agent runtime behind the synchronous stdlib HTTP server."""
 
@@ -243,6 +259,27 @@ class RequestHandler(BaseHTTPRequestHandler):
             })
             return
 
+        if parsed.path == "/api/runtime-health":
+            try:
+                self.agent_service.ensure_started()
+                self._send_json({
+                    "ok": True,
+                    "runtime": "ready",
+                    "has_deepseek_key": bool(os.environ.get("DEEPSEEK_API_KEY")),
+                })
+            except Exception as exc:
+                traceback.print_exc()
+                self._send_json(
+                    {
+                        "ok": False,
+                        "runtime": "error",
+                        "error": _friendly_runtime_error(exc),
+                        "error_type": type(exc).__name__,
+                    },
+                    status=HTTPStatus.SERVICE_UNAVAILABLE,
+                )
+            return
+
         if parsed.path == "/api/sessions":
             self._send_json({"sessions": read_sessions()})
             return
@@ -284,8 +321,12 @@ class RequestHandler(BaseHTTPRequestHandler):
                 "session": read_session(session_id),
             })
         except Exception as exc:
+            traceback.print_exc()
             self._send_json(
-                {"error": _friendly_runtime_error(exc)},
+                {
+                    "error": _friendly_runtime_error(exc),
+                    "error_type": type(exc).__name__,
+                },
                 status=HTTPStatus.SERVICE_UNAVAILABLE,
             )
 
