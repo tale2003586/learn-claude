@@ -1,3 +1,5 @@
-openai
-python-dotenv
-PyYAML
+openai==2.38.0
+httpx==0.28.1
+pydantic==2.13.4
+python-dotenv==1.2.2
+PyYAML==6.0.3

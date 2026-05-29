@@ -161,6 +161,12 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com
 USE_LOCAL_PROXY=0
 WEB_USERNAME=agent
 WEB_PASSWORD=一段很长的随机密码
+PYTHON_IMAGE=python:3.12-slim
+PIP_INDEX_URL=https://pypi.org/simple
+PIP_EXTRA_INDEX_URL=
+PIP_TRUSTED_HOST=
+PIP_DEFAULT_TIMEOUT=180
+PIP_RETRIES=10
 ```
 
 说明：
@@ -168,6 +174,8 @@ WEB_PASSWORD=一段很长的随机密码
 - `DEEPSEEK_API_KEY` 必填。
 - `USE_LOCAL_PROXY=0` 适合云服务器；本地开发如果要走代理，可以设为 `1`。
 - 设置 `WEB_PASSWORD` 后浏览器会弹登录框。云服务器一定要设置。
+- `PYTHON_IMAGE` 是 Docker 基础镜像。Docker Hub 访问超时时，可以临时换成你服务器可访问的 Python 3.12 slim 镜像源。
+- `PIP_INDEX_URL` 是 Python 依赖下载源。`files.pythonhosted.org` 超时时，可以改成你服务器可访问的 PyPI mirror。
 
 ### 2.5 启动容器
 
@@ -499,6 +507,160 @@ ls -la docker-compose.yml Dockerfile
 - 如果服务器代码来自 Git，先把本地新增的 `Dockerfile`、`docker-compose.yml`、`.dockerignore` 提交并推送，然后服务器执行 `git pull`。
 - 如果手动上传代码，把 `Dockerfile`、`docker-compose.yml`、`.dockerignore`、`requirements.txt`、`.env.example` 和 `web/` 目录一起上传到服务器项目根目录。
 - 临时指定配置文件路径：`docker compose -f /opt/agent-console/docker-compose.yml up -d --build`。
+
+拉取 `python:3.12-slim` 超时：
+
+```text
+failed to resolve source metadata for docker.io/library/python:3.12-slim
+i/o timeout
+```
+
+这是服务器访问 Docker Hub 超时，不是应用代码问题。先单独测试：
+
+```bash
+sudo docker pull python:3.12-slim
+```
+
+如果也超时，选一种处理方式：
+
+方式 A：配置 Docker 镜像加速器。使用你的云厂商提供的 Docker Hub mirror，编辑 `/etc/docker/daemon.json`：
+
+```json
+{
+  "registry-mirrors": [
+    "https://你的镜像加速地址"
+  ]
+}
+```
+
+然后重启 Docker：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart docker
+sudo docker pull python:3.12-slim
+docker compose up -d --build
+```
+
+方式 B：服务器如果需要代理才能访问 Docker Hub，需要给 Docker daemon 配代理，而不是只给 shell 配 `HTTP_PROXY`。创建目录：
+
+```bash
+sudo mkdir -p /etc/systemd/system/docker.service.d
+sudo nano /etc/systemd/system/docker.service.d/proxy.conf
+```
+
+写入：
+
+```ini
+[Service]
+Environment="HTTP_PROXY=http://代理地址:端口"
+Environment="HTTPS_PROXY=http://代理地址:端口"
+Environment="NO_PROXY=localhost,127.0.0.1"
+```
+
+重启：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart docker
+sudo docker pull python:3.12-slim
+docker compose up -d --build
+```
+
+方式 C：临时换基础镜像。确认你的替代镜像是 Python 3.12 slim 兼容镜像后，在 `.env` 里改：
+
+```bash
+PYTHON_IMAGE=你的镜像源/library/python:3.12-slim
+```
+
+再构建：
+
+```bash
+docker compose up -d --build
+```
+
+安装 Python 依赖超时：
+
+```text
+RUN pip install -r requirements.txt
+HTTPSConnectionPool(host='files.pythonhosted.org', port=443): Read timed out.
+```
+
+这是容器构建时访问 PyPI 或 `files.pythonhosted.org` 超时。如果日志里还有：
+
+```text
+pip is still looking at multiple versions of httpx
+```
+
+说明依赖没有锁死，pip 会反复下载不同版本 metadata。当前仓库的 `requirements.txt` 已经锁定关键版本来减少回溯；请先确认服务器也同步了新版 `requirements.txt`、`Dockerfile` 和 `docker-compose.yml`：
+
+```bash
+grep -n 'httpx==0.28.1' requirements.txt
+grep -n 'prefer-binary' Dockerfile
+grep -n 'PIP_INDEX_URL' docker-compose.yml
+```
+
+再在服务器上测网络：
+
+```bash
+curl -I https://pypi.org/simple/openai/
+curl -I https://files.pythonhosted.org/
+```
+
+如果访问慢或超时，改 `.env` 里的 pip 配置。先打开：
+
+```bash
+nano .env
+```
+
+可选一：使用默认 PyPI，但增加超时和重试：
+
+```bash
+PIP_INDEX_URL=https://pypi.org/simple
+PIP_EXTRA_INDEX_URL=
+PIP_TRUSTED_HOST=
+PIP_DEFAULT_TIMEOUT=300
+PIP_RETRIES=20
+```
+
+可选二：换成你服务器可访问的 PyPI 镜像源：
+
+```bash
+PIP_INDEX_URL=https://mirrors.cloud.tencent.com/pypi/simple
+PIP_EXTRA_INDEX_URL=
+PIP_TRUSTED_HOST=mirrors.cloud.tencent.com
+PIP_DEFAULT_TIMEOUT=300
+PIP_RETRIES=20
+```
+
+其他常见可选源：
+
+```bash
+PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
+```
+
+```bash
+PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
+PIP_TRUSTED_HOST=mirrors.aliyun.com
+```
+
+然后重新构建，不用缓存：
+
+```bash
+docker compose build --no-cache
+docker compose up -d
+```
+
+如果你临时只想在命令行指定，也可以：
+
+```bash
+PIP_INDEX_URL=https://mirrors.cloud.tencent.com/pypi/simple \
+PIP_TRUSTED_HOST=mirrors.cloud.tencent.com \
+PIP_DEFAULT_TIMEOUT=300 \
+PIP_RETRIES=20 \
+docker compose up -d --build
+```
 
 API key 没读到：
 
