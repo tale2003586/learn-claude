@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Agent Web Console</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <script defer src="/static/app.js"></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="sidebar">
+        <header class="brand-row">
+          <div>
+            <h1>Agent Console</h1>
+            <p id="workspaceLabel">workspace</p>
+          </div>
+          <span id="statusBadge" class="status-badge">启动中</span>
+        </header>
+
+        <section class="panel sessions-panel">
+          <div class="panel-head">
+            <h2>会话</h2>
+            <button id="newSessionBtn" class="icon-button" type="button" title="新会话" aria-label="新会话">+</button>
+          </div>
+          <div id="sessionsList" class="sessions-list"></div>
+        </section>
+
+        <section class="panel memory-panel">
+          <div class="panel-head">
+            <h2>记忆</h2>
+            <button id="refreshMemoryBtn" class="text-button" type="button">刷新</button>
+          </div>
+          <div id="memoryTabs" class="memory-tabs"></div>
+          <pre id="memoryContent" class="memory-content"></pre>
+        </section>
+      </aside>
+
+      <section class="chat-pane">
+        <header class="chat-header">
+          <div>
+            <p class="eyebrow">当前会话</p>
+            <h2 id="sessionTitle">default</h2>
+          </div>
+          <div class="mode-actions" aria-label="模式切换">
+            <button data-command="/hybrid" type="button">Hybrid</button>
+            <button data-command="/chat" type="button">Chat</button>
+            <button data-command="/coding" type="button">Coding</button>
+          </div>
+        </header>
+
+        <div id="messages" class="messages" aria-live="polite"></div>
+
+        <form id="composer" class="composer">
+          <textarea id="messageInput" rows="3" placeholder="输入消息"></textarea>
+          <div class="composer-actions">
+            <span id="composerState"></span>
+            <button id="sendBtn" type="submit">发送</button>
+          </div>
+        </form>
+      </section>
+    </main>
+  </body>
+</html>
