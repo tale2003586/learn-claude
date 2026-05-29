@@ -7,20 +7,30 @@ import hmac
 import json
 import mimetypes
 import os
+import shutil
 import sys
 import threading
 import traceback
+import warnings
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
+
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore", category=DeprecationWarning, message="'cgi' is deprecated.*")
+    import cgi
 
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC_DIR = ROOT / "web" / "static"
 SESSIONS_DB = ROOT / ".sessions" / "sessions.db"
 MEMORY_DIR = ROOT / "memory"
+STORAGE_DIR = ROOT / "storage"
+RECORDS_DIR = STORAGE_DIR / "records"
+ANALYSIS_RECORD_PATH = RECORDS_DIR / "analysis.txt"
 MEMORY_FILES = [
     "SELF.md",
     "MEMORY.md",
@@ -29,7 +39,8 @@ MEMORY_FILES = [
     "RECENT_CONTEXT.md",
     "HISTORY.md",
 ]
-MAX_BODY_BYTES = 1_000_000
+DEFAULT_MAX_BODY_BYTES = 52_428_800
+MAX_PREVIEW_BYTES = 1_000_000
 AUTH_REALM = "Agent Web"
 
 if str(ROOT) not in sys.path:
@@ -50,6 +61,9 @@ def load_env_file(path: Path) -> None:
 
 
 load_env_file(ROOT / ".env")
+MAX_BODY_BYTES = int(os.environ.get("WEB_MAX_BODY_BYTES", str(DEFAULT_MAX_BODY_BYTES)))
+STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+RECORDS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class AgentService:
@@ -227,6 +241,86 @@ def read_memory_files() -> list[dict[str, str]]:
     return files
 
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _safe_storage_path(relative_path: str | None = "") -> Path:
+    raw = unquote(str(relative_path or "")).strip().lstrip("/")
+    candidate = (STORAGE_DIR / raw).resolve()
+    if candidate != STORAGE_DIR and not candidate.is_relative_to(STORAGE_DIR):
+        raise ValueError("Path escapes storage.")
+    return candidate
+
+
+def _storage_rel(path: Path) -> str:
+    if path == STORAGE_DIR:
+        return ""
+    return path.relative_to(STORAGE_DIR).as_posix()
+
+
+def _entry_for(path: Path) -> dict[str, Any]:
+    stat = path.stat()
+    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    is_dir = path.is_dir()
+    return {
+        "name": path.name,
+        "path": _storage_rel(path),
+        "is_dir": is_dir,
+        "size": 0 if is_dir else stat.st_size,
+        "modified": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+        "mime": "inode/directory" if is_dir else mime,
+        "previewable": _is_previewable(path, mime),
+    }
+
+
+def _is_previewable(path: Path, mime: str) -> bool:
+    if path.is_dir():
+        return False
+    if mime.startswith("text/") or mime in {
+        "application/json",
+        "application/xml",
+        "application/javascript",
+    }:
+        return True
+    return path.suffix.lower() in {
+        ".txt", ".md", ".py", ".js", ".css", ".html", ".json", ".csv", ".log", ".yaml", ".yml",
+    }
+
+
+def list_storage(relative_path: str | None = "") -> dict[str, Any]:
+    current = _safe_storage_path(relative_path)
+    if not current.exists():
+        raise FileNotFoundError("Path not found.")
+    if not current.is_dir():
+        raise NotADirectoryError("Path is not a directory.")
+    entries = [_entry_for(path) for path in current.iterdir() if not path.name.startswith(".")]
+    entries.sort(key=lambda item: (not item["is_dir"], item["name"].lower()))
+    parent = ""
+    if current != STORAGE_DIR:
+        parent = _storage_rel(current.parent)
+    return {
+        "path": _storage_rel(current),
+        "parent": parent,
+        "entries": entries,
+        "record_path": _storage_rel(ANALYSIS_RECORD_PATH),
+    }
+
+
+def append_analysis_record(*, user_text: str, assistant_text: str) -> str:
+    RECORDS_DIR.mkdir(parents=True, exist_ok=True)
+    entry = (
+        f"\n## {_now_iso()}\n\n"
+        "USER:\n"
+        f"{user_text.strip()}\n\n"
+        "AI:\n"
+        f"{assistant_text.strip()}\n"
+    )
+    with ANALYSIS_RECORD_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(entry)
+    return _storage_rel(ANALYSIS_RECORD_PATH)
+
+
 def auth_credentials() -> tuple[str, str] | None:
     password = os.environ.get("WEB_PASSWORD", "")
     if not password:
@@ -295,6 +389,23 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._send_json({"files": read_memory_files()})
             return
 
+        if parsed.path == "/api/files":
+            params = parse_qs(parsed.query)
+            path = params.get("path", [""])[0]
+            try:
+                self._send_json({"files": list_storage(path)})
+            except Exception as exc:
+                self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        if parsed.path == "/api/files/preview":
+            self._handle_file_preview(parsed)
+            return
+
+        if parsed.path == "/api/files/download":
+            self._handle_file_download(parsed)
+            return
+
         self._send_static(parsed.path)
 
     def do_POST(self) -> None:
@@ -302,10 +413,35 @@ class RequestHandler(BaseHTTPRequestHandler):
             return
 
         parsed = urlparse(self.path)
+        if parsed.path == "/api/chat":
+            self._handle_chat()
+            return
+
+        if parsed.path == "/api/analyze":
+            self._handle_analyze()
+            return
+
+        if parsed.path == "/api/files/upload":
+            self._handle_file_upload()
+            return
+
+        if parsed.path == "/api/files/mkdir":
+            self._handle_mkdir()
+            return
+
+        if parsed.path == "/api/files/rename":
+            self._handle_rename()
+            return
+
+        if parsed.path == "/api/files/delete":
+            self._handle_delete()
+            return
+
         if parsed.path != "/api/chat":
             self._send_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
             return
 
+    def _handle_chat(self) -> None:
         try:
             payload = self._read_json_body()
             message = str(payload.get("message", "")).strip()
@@ -329,6 +465,172 @@ class RequestHandler(BaseHTTPRequestHandler):
                 },
                 status=HTTPStatus.SERVICE_UNAVAILABLE,
             )
+
+    def _handle_analyze(self) -> None:
+        try:
+            payload = self._read_json_body()
+            text = str(payload.get("text", "")).strip()
+            session_id = str(payload.get("session_id", "analysis")).strip() or "analysis"
+            if not text:
+                self._send_json({"error": "text is required"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            prompt = (
+                "请分析下面这段文字，给出清晰、有结构的回复。"
+                "请保留关键事实、判断可能的问题，并给出可执行建议。\n\n"
+                f"{text}"
+            )
+            reply = self.agent_service.ask(session_id=session_id, content=prompt)
+            record_path = append_analysis_record(user_text=text, assistant_text=reply)
+            self._send_json({
+                "reply": reply,
+                "record_path": record_path,
+                "record_download_url": "/api/files/download?path=" + quote(record_path),
+            })
+        except Exception as exc:
+            traceback.print_exc()
+            self._send_json(
+                {
+                    "error": _friendly_runtime_error(exc),
+                    "error_type": type(exc).__name__,
+                },
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+
+    def _handle_file_preview(self, parsed) -> None:
+        try:
+            params = parse_qs(parsed.query)
+            path = _safe_storage_path(params.get("path", [""])[0])
+            if not path.exists() or not path.is_file():
+                self._send_json({"error": "File not found"}, status=HTTPStatus.NOT_FOUND)
+                return
+            mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+            if not _is_previewable(path, mime):
+                self._send_json({"error": "Preview is not available"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            if path.stat().st_size > MAX_PREVIEW_BYTES:
+                self._send_json({"error": "File is too large to preview"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            self._send_json({
+                "name": path.name,
+                "path": _storage_rel(path),
+                "content": path.read_text(encoding="utf-8", errors="replace"),
+                "mime": mime,
+            })
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+
+    def _handle_file_download(self, parsed) -> None:
+        try:
+            params = parse_qs(parsed.query)
+            path = _safe_storage_path(params.get("path", [""])[0])
+            if not path.exists() or not path.is_file():
+                self._send_json({"error": "File not found"}, status=HTTPStatus.NOT_FOUND)
+                return
+            mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+            body = path.read_bytes()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", mime)
+            self.send_header("Content-Length", str(len(body)))
+            safe_name = quote(path.name)
+            self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{safe_name}")
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+
+    def _handle_file_upload(self) -> None:
+        try:
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                length = 0
+            if length > MAX_BODY_BYTES:
+                self._send_json({"error": "Upload is too large"}, status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+                return
+            form = cgi.FieldStorage(
+                fp=self.rfile,
+                headers=self.headers,
+                environ={
+                    "REQUEST_METHOD": "POST",
+                    "CONTENT_TYPE": self.headers.get("Content-Type", ""),
+                    "CONTENT_LENGTH": str(length),
+                },
+            )
+            target_dir = _safe_storage_path(form.getfirst("path", ""))
+            target_dir.mkdir(parents=True, exist_ok=True)
+            if not target_dir.is_dir():
+                self._send_json({"error": "Target path is not a directory"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            files = form["file"] if "file" in form else []
+            if not isinstance(files, list):
+                files = [files]
+            saved = []
+            for item in files:
+                if not getattr(item, "filename", ""):
+                    continue
+                filename = Path(item.filename).name
+                dest = (target_dir / filename).resolve()
+                if dest != STORAGE_DIR and not dest.is_relative_to(STORAGE_DIR):
+                    raise ValueError("Path escapes storage.")
+                with dest.open("wb") as handle:
+                    shutil.copyfileobj(item.file, handle)
+                saved.append(_entry_for(dest))
+            self._send_json({"saved": saved, "files": list_storage(_storage_rel(target_dir))})
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+
+    def _handle_mkdir(self) -> None:
+        try:
+            payload = self._read_json_body()
+            parent = _safe_storage_path(payload.get("path", ""))
+            name = Path(str(payload.get("name", "")).strip()).name
+            if not name:
+                self._send_json({"error": "name is required"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            target = (parent / name).resolve()
+            if target != STORAGE_DIR and not target.is_relative_to(STORAGE_DIR):
+                raise ValueError("Path escapes storage.")
+            target.mkdir(parents=True, exist_ok=True)
+            self._send_json({"files": list_storage(_storage_rel(parent))})
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+
+    def _handle_rename(self) -> None:
+        try:
+            payload = self._read_json_body()
+            source = _safe_storage_path(payload.get("path", ""))
+            name = Path(str(payload.get("name", "")).strip()).name
+            if not name:
+                self._send_json({"error": "name is required"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            if source == STORAGE_DIR:
+                self._send_json({"error": "Cannot rename storage root"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            target = (source.parent / name).resolve()
+            if target != STORAGE_DIR and not target.is_relative_to(STORAGE_DIR):
+                raise ValueError("Path escapes storage.")
+            if target.exists():
+                raise FileExistsError("Target already exists.")
+            source.rename(target)
+            self._send_json({"files": list_storage(_storage_rel(target.parent))})
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+
+    def _handle_delete(self) -> None:
+        try:
+            payload = self._read_json_body()
+            target = _safe_storage_path(payload.get("path", ""))
+            if target == STORAGE_DIR:
+                self._send_json({"error": "Cannot delete storage root"}, status=HTTPStatus.BAD_REQUEST)
+                return
+            parent = target.parent
+            if target.is_dir():
+                shutil.rmtree(target)
+            elif target.exists():
+                target.unlink()
+            self._send_json({"files": list_storage(_storage_rel(parent))})
+        except Exception as exc:
+            self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
 
     def _read_json_body(self) -> dict[str, Any]:
         try:

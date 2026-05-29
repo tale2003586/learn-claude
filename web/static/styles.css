@@ -74,13 +74,28 @@ button {
 }
 
 .sidebar,
-.chat-pane {
+.workspace-area {
   min-height: 0;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.88);
   box-shadow: var(--shadow);
   overflow: hidden;
+}
+
+.workspace-area {
+  display: grid;
+  min-width: 0;
+}
+
+.main-view {
+  display: none;
+  min-width: 0;
+  min-height: 0;
+}
+
+.main-view.active {
+  display: grid;
 }
 
 .sidebar {
@@ -204,7 +219,7 @@ button {
 
 .sidebar-tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 6px;
   padding: 10px;
   border-bottom: 1px solid var(--border);
@@ -258,6 +273,12 @@ button {
   overflow: auto;
 }
 
+.sidebar-panel[data-sidebar-panel="files"].active,
+.sidebar-panel[data-sidebar-panel="analysis"].active {
+  display: block;
+  overflow: auto;
+}
+
 .panel-head {
   min-height: 50px;
   padding: 0 12px 0 14px;
@@ -292,6 +313,13 @@ button {
 .text-button:hover,
 .mode-actions button:hover {
   background: #eef3f7;
+}
+
+.text-button:disabled,
+.file-row-actions button:disabled {
+  cursor: default;
+  color: #9aa5af;
+  background: #eef1f4;
 }
 
 .filter-row {
@@ -449,9 +477,17 @@ button {
 }
 
 .chat-pane {
-  display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   min-width: 0;
+}
+
+.files-pane {
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 34%);
+}
+
+.analysis-pane {
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .chat-title-row {
@@ -472,6 +508,24 @@ button {
   background: rgba(255, 255, 255, 0.94);
 }
 
+.tool-header {
+  grid-column: 1 / -1;
+  min-height: 76px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.94);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tool-header h2 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: 0;
+}
+
 .chat-header h2 {
   max-width: min(62vw, 760px);
   overflow-wrap: anywhere;
@@ -483,6 +537,30 @@ button {
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
+}
+
+.file-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.text-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--surface-soft);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.text-link:hover {
+  background: #eef3f7;
 }
 
 .chat-scroll {
@@ -617,6 +695,223 @@ button {
   background: #91aaa4;
 }
 
+.file-browser {
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+  background: linear-gradient(180deg, #fbfcfd, #f4f7f9);
+}
+
+.file-breadcrumb {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 0 0 12px;
+}
+
+.file-breadcrumb button {
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--surface);
+}
+
+.file-list {
+  display: grid;
+  gap: 8px;
+}
+
+.file-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  min-height: 58px;
+  padding: 10px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.file-row:hover {
+  border-color: #b9c7d4;
+  background: #f8fafc;
+}
+
+.file-main {
+  min-width: 0;
+  text-align: left;
+  background: transparent;
+  color: var(--text);
+}
+
+.file-name {
+  display: block;
+  overflow-wrap: anywhere;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.file-meta {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.file-row-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.file-row-actions button,
+.file-row-actions a {
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--surface-soft);
+  text-decoration: none;
+  font-size: 12px;
+}
+
+.file-preview {
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+  border-left: 1px solid var(--border);
+  background: #fbfcfd;
+}
+
+.preview-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.preview-title strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.preview-title a {
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--surface-soft);
+  text-decoration: none;
+  font-size: 12px;
+}
+
+.file-preview pre,
+.analysis-result pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: #263036;
+  font-size: 13px;
+  line-height: 1.58;
+}
+
+.preview-empty {
+  height: 100%;
+  min-height: 180px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.analysis-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 40%);
+  gap: 12px;
+  min-height: 0;
+  padding: 14px;
+  background: linear-gradient(180deg, #fbfcfd, #f4f7f9);
+}
+
+.analysis-form,
+.analysis-result {
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.analysis-form {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 10px;
+  padding: 12px;
+}
+
+.analysis-form textarea {
+  width: 100%;
+  min-height: 0;
+  resize: none;
+  padding: 12px 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  outline: none;
+  background: var(--surface-soft);
+  color: var(--text);
+  line-height: 1.55;
+}
+
+.analysis-form textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.14);
+}
+
+.analysis-form textarea:disabled {
+  color: var(--muted);
+  background: #eef1f4;
+}
+
+.analysis-form button {
+  min-height: 34px;
+  min-width: 106px;
+  padding: 0 18px;
+  border-radius: 8px;
+  color: var(--surface);
+  background: var(--accent);
+  font-weight: 700;
+}
+
+.analysis-form button:disabled {
+  cursor: wait;
+  background: #91aaa4;
+}
+
+.analysis-result {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.analysis-result pre {
+  overflow: auto;
+  padding: 14px;
+}
+
 .app-shell.is-collapsed .brand-copy,
 .app-shell.is-collapsed .status-badge,
 .app-shell.is-collapsed .sidebar-tabs,
@@ -711,13 +1006,28 @@ button {
     border-bottom: 1px solid var(--border);
   }
 
-  .chat-pane {
+  .workspace-area {
     width: 100%;
     height: 100dvh;
     min-height: 0;
     border: 0;
     border-radius: 0;
     box-shadow: none;
+  }
+
+  .main-view.active {
+    height: 100dvh;
+  }
+
+  .files-pane.active,
+  .analysis-pane.active {
+    display: grid;
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr) minmax(170px, 32dvh);
+  }
+
+  .analysis-pane.active {
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .chat-header {
@@ -730,6 +1040,18 @@ button {
 
   .chat-header h2 {
     max-width: 100%;
+    font-size: 18px;
+  }
+
+  .tool-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+    min-height: 0;
+    padding: 12px;
+  }
+
+  .tool-header h2 {
     font-size: 18px;
   }
 
@@ -756,6 +1078,39 @@ button {
 
   .mode-actions button {
     flex: 0 0 auto;
+  }
+
+  .file-actions {
+    justify-content: flex-start;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+  }
+
+  .file-actions button {
+    flex: 0 0 auto;
+  }
+
+  .file-browser {
+    padding: 12px;
+  }
+
+  .file-preview {
+    border-left: 0;
+    border-top: 1px solid var(--border);
+  }
+
+  .file-row {
+    grid-template-columns: 1fr;
+  }
+
+  .file-row-actions {
+    justify-content: flex-start;
+  }
+
+  .analysis-grid {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(220px, 1fr) minmax(180px, 0.72fr);
+    padding: 12px;
   }
 
   .messages {

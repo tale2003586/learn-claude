@@ -7,9 +7,14 @@ const state = {
   activeMemory: "MEMORY.md",
   sessionFilter: "",
   sidebarPanel: localStorage.getItem("sidebarPanel") || "sessions",
+  mainView: localStorage.getItem("mainView") || "chat",
   sidebarCollapsed: localStorage.getItem("sidebarCollapsed") === "1",
   mobileSidebarOpen: false,
   currentMode: "hybrid",
+  filePath: "",
+  fileParent: "",
+  fileEntries: [],
+  analysisBusy: false,
 };
 
 const els = {
@@ -17,8 +22,10 @@ const els = {
   sidebarToggle: document.querySelector("#sidebarToggle"),
   sidebarOverlay: document.querySelector("#sidebarOverlay"),
   mobileSidebarOpen: document.querySelector("#mobileSidebarOpen"),
+  mobileSecondaryOpen: [...document.querySelectorAll(".mobile-secondary-open")],
   sidebarTabs: [...document.querySelectorAll("[data-sidebar-tab]")],
   sidebarPanels: [...document.querySelectorAll("[data-sidebar-panel]")],
+  mainViewPanels: [...document.querySelectorAll("[data-main-view-panel]")],
   workspaceLabel: document.querySelector("#workspaceLabel"),
   workspacePath: document.querySelector("#workspacePath"),
   statusBadge: document.querySelector("#statusBadge"),
@@ -40,14 +47,38 @@ const els = {
   modeMetric: document.querySelector("#modeMetric"),
   sessionCountMetric: document.querySelector("#sessionCountMetric"),
   memoryCountMetric: document.querySelector("#memoryCountMetric"),
+  refreshFilesBtn: document.querySelector("#refreshFilesBtn"),
+  filePathLabel: document.querySelector("#filePathLabel"),
+  fileCountMetric: document.querySelector("#fileCountMetric"),
+  fileUpBtn: document.querySelector("#fileUpBtn"),
+  fileUploadBtn: document.querySelector("#fileUploadBtn"),
+  fileMkdirBtn: document.querySelector("#fileMkdirBtn"),
+  fileUploadInput: document.querySelector("#fileUploadInput"),
+  fileBreadcrumb: document.querySelector("#fileBreadcrumb"),
+  fileList: document.querySelector("#fileList"),
+  filePreview: document.querySelector("#filePreview"),
+  analysisRecordPath: document.querySelector("#analysisRecordPath"),
+  analysisDownloadLink: document.querySelector("#analysisDownloadLink"),
+  analysisForm: document.querySelector("#analysisForm"),
+  analysisInput: document.querySelector("#analysisInput"),
+  analysisState: document.querySelector("#analysisState"),
+  analysisSubmitBtn: document.querySelector("#analysisSubmitBtn"),
+  analysisOutput: document.querySelector("#analysisOutput"),
 };
 
 async function fetchJson(url, options = {}) {
+  const headers = new Headers(options.headers || {});
+  if (!(options.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
   const response = await fetch(url, {
-    headers: { "Content-Type": "application/json" },
     ...options,
+    headers,
   });
-  const data = await response.json();
+  const contentType = response.headers.get("Content-Type") || "";
+  const data = contentType.includes("application/json")
+    ? await response.json()
+    : { error: await response.text() };
   if (!response.ok) {
     throw new Error(data.error || `HTTP ${response.status}`);
   }
@@ -67,6 +98,9 @@ function setBusy(value) {
 }
 
 function setSidebarPanel(panelName) {
+  if (!els.sidebarPanels.some((panel) => panel.dataset.sidebarPanel === panelName)) {
+    panelName = "sessions";
+  }
   state.sidebarPanel = panelName;
   localStorage.setItem("sidebarPanel", panelName);
 
@@ -75,6 +109,22 @@ function setSidebarPanel(panelName) {
   }
   for (const panel of els.sidebarPanels) {
     panel.classList.toggle("active", panel.dataset.sidebarPanel === panelName);
+  }
+}
+
+function setMainView(viewName) {
+  if (!els.mainViewPanels.some((panel) => panel.dataset.mainViewPanel === viewName)) {
+    viewName = "chat";
+  }
+  state.mainView = viewName;
+  localStorage.setItem("mainView", viewName);
+
+  for (const panel of els.mainViewPanels) {
+    panel.classList.toggle("active", panel.dataset.mainViewPanel === viewName);
+  }
+
+  if (viewName === "files" && state.fileEntries.length === 0) {
+    loadFiles().catch(showFileError);
   }
 }
 
@@ -214,6 +264,7 @@ function renderSessions(sessions = state.sessions) {
     button.addEventListener("click", () => {
       state.rawSession = !isWeb;
       state.sessionId = label;
+      setMainView("chat");
       loadSession(label, !isWeb);
       if (isMobileViewport()) {
         setMobileSidebarOpen(false);
@@ -242,6 +293,284 @@ function renderMemory() {
     || state.memoryFiles[0];
   els.memoryContent.textContent = active?.content || "";
   updateMetrics();
+}
+
+function formatBytes(value = 0) {
+  if (!value) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let size = Number(value);
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  const digits = unitIndex === 0 ? 0 : 1;
+  return `${size.toFixed(digits)} ${units[unitIndex]}`;
+}
+
+function storageDisplayPath(path = state.filePath) {
+  return path ? `/${path}` : "/";
+}
+
+function downloadUrl(path) {
+  return `/api/files/download?path=${encodeURIComponent(path)}`;
+}
+
+function renderFileBreadcrumb() {
+  els.fileBreadcrumb.innerHTML = "";
+
+  const root = document.createElement("button");
+  root.type = "button";
+  root.textContent = "storage";
+  root.addEventListener("click", () => loadFiles("").catch(showFileError));
+  els.fileBreadcrumb.append(root);
+
+  const parts = state.filePath.split("/").filter(Boolean);
+  let current = "";
+  for (const part of parts) {
+    current = current ? `${current}/${part}` : part;
+    const target = current;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = part;
+    button.addEventListener("click", () => loadFiles(target).catch(showFileError));
+    els.fileBreadcrumb.append(button);
+  }
+}
+
+function renderFilePreviewEmpty(text = "选择一个文本文件进行预览") {
+  els.filePreview.innerHTML = "";
+  const empty = document.createElement("div");
+  empty.className = "preview-empty";
+  empty.textContent = text;
+  els.filePreview.append(empty);
+}
+
+function renderFilePreviewContent(file, content) {
+  els.filePreview.innerHTML = "";
+  const title = document.createElement("div");
+  title.className = "preview-title";
+
+  const name = document.createElement("strong");
+  name.textContent = file.name || file.path;
+
+  const link = document.createElement("a");
+  link.href = downloadUrl(file.path);
+  link.textContent = "下载";
+
+  title.append(name, link);
+
+  const pre = document.createElement("pre");
+  pre.textContent = content;
+  els.filePreview.append(title, pre);
+}
+
+function renderFiles() {
+  els.filePathLabel.textContent = storageDisplayPath();
+  els.fileCountMetric.textContent = String(state.fileEntries.length);
+  els.fileUpBtn.disabled = !state.filePath;
+  renderFileBreadcrumb();
+
+  els.fileList.innerHTML = "";
+  if (state.fileEntries.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.textContent = "这个目录是空的";
+    els.fileList.append(empty);
+    return;
+  }
+
+  for (const entry of state.fileEntries) {
+    const row = document.createElement("article");
+    row.className = "file-row";
+
+    const main = document.createElement("button");
+    main.type = "button";
+    main.className = "file-main";
+
+    const name = document.createElement("span");
+    name.className = "file-name";
+    name.textContent = `${entry.is_dir ? "目录" : "文件"} · ${entry.name}`;
+
+    const meta = document.createElement("span");
+    meta.className = "file-meta";
+    const modified = formatDate(entry.modified);
+    meta.textContent = entry.is_dir
+      ? `文件夹 · ${modified}`
+      : `${formatBytes(entry.size)} · ${entry.mime || "file"} · ${modified}`;
+
+    main.append(name, meta);
+    main.addEventListener("click", () => {
+      if (entry.is_dir) {
+        loadFiles(entry.path).catch(showFileError);
+        return;
+      }
+      previewFile(entry).catch(showFileError);
+    });
+
+    const actions = document.createElement("div");
+    actions.className = "file-row-actions";
+
+    const openButton = document.createElement("button");
+    openButton.type = "button";
+    openButton.textContent = entry.is_dir ? "打开" : "预览";
+    openButton.addEventListener("click", () => {
+      if (entry.is_dir) {
+        loadFiles(entry.path).catch(showFileError);
+      } else {
+        previewFile(entry).catch(showFileError);
+      }
+    });
+    actions.append(openButton);
+
+    if (!entry.is_dir) {
+      const download = document.createElement("a");
+      download.href = downloadUrl(entry.path);
+      download.textContent = "下载";
+      actions.append(download);
+    }
+
+    const renameButton = document.createElement("button");
+    renameButton.type = "button";
+    renameButton.textContent = "重命名";
+    renameButton.addEventListener("click", () => renameEntry(entry));
+    actions.append(renameButton);
+
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.textContent = "删除";
+    deleteButton.addEventListener("click", () => deleteEntry(entry));
+    actions.append(deleteButton);
+
+    row.append(main, actions);
+    els.fileList.append(row);
+  }
+}
+
+function showFileError(error) {
+  renderFilePreviewEmpty(error.message || String(error));
+  setStatus("异常", "error");
+}
+
+async function loadFiles(path = state.filePath) {
+  const data = await fetchJson(`/api/files?path=${encodeURIComponent(path || "")}`);
+  const files = data.files || {};
+  state.filePath = files.path || "";
+  state.fileParent = files.parent || "";
+  state.fileEntries = files.entries || [];
+  if (files.record_path) {
+    els.analysisRecordPath.textContent = files.record_path;
+    els.analysisDownloadLink.href = downloadUrl(files.record_path);
+  }
+  renderFiles();
+  if (!els.filePreview.childElementCount) {
+    renderFilePreviewEmpty();
+  }
+  return files;
+}
+
+async function previewFile(entry) {
+  if (!entry.previewable) {
+    renderFilePreviewEmpty("这个文件不能直接预览，可以下载查看");
+    return;
+  }
+  const data = await fetchJson(`/api/files/preview?path=${encodeURIComponent(entry.path)}`);
+  renderFilePreviewContent(data, data.content || "");
+}
+
+async function makeDirectory() {
+  const name = window.prompt("文件夹名称");
+  if (!name) return;
+  const data = await fetchJson("/api/files/mkdir", {
+    method: "POST",
+    body: JSON.stringify({ path: state.filePath, name }),
+  });
+  state.fileEntries = data.files?.entries || [];
+  renderFiles();
+}
+
+async function renameEntry(entry) {
+  const name = window.prompt("新的名称", entry.name);
+  if (!name || name === entry.name) return;
+  const data = await fetchJson("/api/files/rename", {
+    method: "POST",
+    body: JSON.stringify({ path: entry.path, name }),
+  });
+  state.fileEntries = data.files?.entries || [];
+  renderFiles();
+  renderFilePreviewEmpty();
+}
+
+async function deleteEntry(entry) {
+  if (!window.confirm(`删除 ${entry.name}？`)) return;
+  const data = await fetchJson("/api/files/delete", {
+    method: "POST",
+    body: JSON.stringify({ path: entry.path }),
+  });
+  state.fileEntries = data.files?.entries || [];
+  renderFiles();
+  renderFilePreviewEmpty();
+}
+
+async function uploadFiles() {
+  const files = [...els.fileUploadInput.files];
+  if (files.length === 0) return;
+  const form = new FormData();
+  form.append("path", state.filePath);
+  for (const file of files) {
+    form.append("file", file);
+  }
+  try {
+    const data = await fetchJson("/api/files/upload", {
+      method: "POST",
+      body: form,
+    });
+    state.fileEntries = data.files?.entries || [];
+    renderFiles();
+    renderFilePreviewEmpty(`${files.length} 个文件已上传`);
+  } catch (error) {
+    showFileError(error);
+  } finally {
+    els.fileUploadInput.value = "";
+  }
+}
+
+function setAnalysisBusy(value) {
+  state.analysisBusy = value;
+  els.analysisSubmitBtn.disabled = value;
+  els.analysisInput.disabled = value;
+  els.analysisState.textContent = value ? "分析中" : "";
+}
+
+async function submitAnalysis() {
+  const text = els.analysisInput.value.trim();
+  if (!text || state.analysisBusy) return;
+  setAnalysisBusy(true);
+  els.analysisOutput.textContent = "";
+  try {
+    const data = await fetchJson("/api/analyze", {
+      method: "POST",
+      body: JSON.stringify({
+        text,
+        session_id: "analysis",
+      }),
+    });
+    els.analysisOutput.textContent = data.reply || "";
+    els.analysisRecordPath.textContent = data.record_path || "records/analysis.txt";
+    els.analysisDownloadLink.href = data.record_download_url || downloadUrl("records/analysis.txt");
+    els.analysisState.textContent = `已保存到 ${data.record_path || "records/analysis.txt"}`;
+    if (state.fileEntries.length > 0) {
+      await loadFiles(state.filePath);
+    }
+  } catch (error) {
+    els.analysisOutput.textContent = error.message;
+    els.analysisState.textContent = "保存失败";
+    setStatus("异常", "error");
+  } finally {
+    state.analysisBusy = false;
+    els.analysisSubmitBtn.disabled = false;
+    els.analysisInput.disabled = false;
+  }
 }
 
 function formatDate(value) {
@@ -370,6 +699,7 @@ function newSession() {
   updateMetrics({ current_mode: "hybrid" });
   setBusy(false);
   setSidebarPanel("sessions");
+  setMainView("chat");
   loadSessions();
   els.input.focus();
 }
@@ -432,7 +762,13 @@ els.modeActions.addEventListener("click", (event) => {
 });
 
 els.sidebarTabs.forEach((tab) => {
-  tab.addEventListener("click", () => setSidebarPanel(tab.dataset.sidebarTab));
+  tab.addEventListener("click", () => {
+    setSidebarPanel(tab.dataset.sidebarTab);
+    setMainView(tab.dataset.mainView || "chat");
+    if (isMobileViewport()) {
+      setMobileSidebarOpen(false);
+    }
+  });
 });
 
 els.sessionSearch.addEventListener("input", () => {
@@ -452,6 +788,12 @@ els.mobileSidebarOpen.addEventListener("click", () => {
   setMobileSidebarOpen(true);
 });
 
+els.mobileSecondaryOpen.forEach((button) => {
+  button.addEventListener("click", () => {
+    setMobileSidebarOpen(true);
+  });
+});
+
 els.sidebarOverlay.addEventListener("click", () => {
   setMobileSidebarOpen(false);
 });
@@ -460,13 +802,23 @@ window.addEventListener("resize", syncResponsiveSidebar);
 
 els.newSessionBtn.addEventListener("click", newSession);
 els.refreshMemoryBtn.addEventListener("click", loadMemory);
+els.refreshFilesBtn.addEventListener("click", () => loadFiles().catch(showFileError));
+els.fileUpBtn.addEventListener("click", () => loadFiles(state.fileParent).catch(showFileError));
+els.fileUploadBtn.addEventListener("click", () => els.fileUploadInput.click());
+els.fileUploadInput.addEventListener("change", uploadFiles);
+els.fileMkdirBtn.addEventListener("click", () => makeDirectory().catch(showFileError));
+els.analysisForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  submitAnalysis();
+});
 
 async function init() {
   setSidebarPanel(state.sidebarPanel);
+  setMainView(state.mainView);
   setSidebarCollapsed(state.sidebarCollapsed);
   syncResponsiveSidebar();
   await loadHealth();
-  await Promise.all([loadSessions(), loadMemory()]);
+  await Promise.all([loadSessions(), loadMemory(), loadFiles()]);
   await loadSession("default", false);
 }
 

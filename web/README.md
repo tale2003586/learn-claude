@@ -11,6 +11,8 @@
 - Web 聊天会话
 - 会话历史列表
 - `memory/*.md` 记忆文件浏览
+- `storage/` 私有文件区，支持上传、预览文本、下载、重命名、删除
+- 文本分析页，AI 回复会和原文一起追加保存到 `storage/records/analysis.txt`
 - `/hybrid`、`/chat`、`/coding` 模式切换
 
 快捷键：
@@ -38,6 +40,7 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com
 USE_LOCAL_PROXY=0
 WEB_USERNAME=agent
 WEB_PASSWORD=换成强密码
+WEB_MAX_BODY_BYTES=52428800
 ```
 
 本地普通 Python 启动：
@@ -161,6 +164,7 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com
 USE_LOCAL_PROXY=0
 WEB_USERNAME=agent
 WEB_PASSWORD=一段很长的随机密码
+WEB_MAX_BODY_BYTES=52428800
 PYTHON_IMAGE=python:3.12-slim
 PIP_INDEX_URL=https://pypi.org/simple
 PIP_EXTRA_INDEX_URL=
@@ -174,6 +178,7 @@ PIP_RETRIES=10
 - `DEEPSEEK_API_KEY` 必填。
 - `USE_LOCAL_PROXY=0` 适合云服务器；本地开发如果要走代理，可以设为 `1`。
 - 设置 `WEB_PASSWORD` 后浏览器会弹登录框。云服务器一定要设置。
+- `WEB_MAX_BODY_BYTES` 控制单次上传大小，默认约 50 MB。
 - `PYTHON_IMAGE` 是 Docker 基础镜像。Docker Hub 访问超时时，可以临时换成你服务器可访问的 Python 3.12 slim 镜像源。
 - `PIP_INDEX_URL` 是 Python 依赖下载源。`files.pythonhosted.org` 超时时，可以改成你服务器可访问的 PyPI mirror。
 
@@ -220,6 +225,7 @@ curl -u agent:你的密码 http://127.0.0.1:8000/api/runtime-health
 `docker-compose.yml` 已挂载这些目录：
 
 ```text
+./storage         文件区和分析记录
 ./memory          长期记忆 Markdown
 ./.sessions      SQLite 会话库
 ./.task_sessions 任务会话
@@ -261,7 +267,7 @@ server {
     listen 80;
     server_name your-domain.example;
 
-    client_max_body_size 2m;
+    client_max_body_size 50m;
 
     location / {
         proxy_pass http://127.0.0.1:8000;
@@ -338,7 +344,7 @@ docker compose up -d --build
 最少备份：
 
 ```bash
-tar czf agent-console-backup-$(date +%F).tar.gz memory .sessions .task_sessions .tasks .team .transcripts .env
+tar czf agent-console-backup-$(date +%F).tar.gz storage memory .sessions .task_sessions .tasks .team .transcripts .env
 ```
 
 恢复时把这些目录放回项目根目录，再：

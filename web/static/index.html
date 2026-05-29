@@ -22,9 +22,11 @@
         </header>
 
         <nav class="sidebar-tabs" aria-label="侧栏视图">
-          <button class="active" data-sidebar-tab="sessions" type="button">会话</button>
-          <button data-sidebar-tab="memory" type="button">记忆</button>
-          <button data-sidebar-tab="activity" type="button">状态</button>
+          <button class="active" data-sidebar-tab="sessions" data-main-view="chat" type="button">会话</button>
+          <button data-sidebar-tab="files" data-main-view="files" type="button">文件</button>
+          <button data-sidebar-tab="analysis" data-main-view="analysis" type="button">分析</button>
+          <button data-sidebar-tab="memory" data-main-view="chat" type="button">记忆</button>
+          <button data-sidebar-tab="activity" data-main-view="chat" type="button">状态</button>
         </nav>
 
         <div class="sidebar-content">
@@ -46,6 +48,37 @@
             </div>
             <div id="memoryTabs" class="memory-tabs"></div>
             <pre id="memoryContent" class="memory-content"></pre>
+          </section>
+
+          <section class="sidebar-panel" data-sidebar-panel="files">
+            <div class="panel-head">
+              <h2>文件</h2>
+              <button id="refreshFilesBtn" class="text-button" type="button">刷新</button>
+            </div>
+            <div class="workspace-card">
+              <span>Path</span>
+              <p id="filePathLabel">/</p>
+            </div>
+            <div class="activity-grid">
+              <div class="activity-item">
+                <span>项目</span>
+                <strong id="fileCountMetric">0</strong>
+              </div>
+              <div class="activity-item">
+                <span>记录</span>
+                <strong>txt</strong>
+              </div>
+            </div>
+          </section>
+
+          <section class="sidebar-panel" data-sidebar-panel="analysis">
+            <div class="panel-head">
+              <h2>分析</h2>
+            </div>
+            <div class="workspace-card">
+              <span>Record</span>
+              <p id="analysisRecordPath">records/analysis.txt</p>
+            </div>
           </section>
 
           <section class="sidebar-panel" data-sidebar-panel="activity">
@@ -79,36 +112,89 @@
       </aside>
       <button id="sidebarOverlay" class="sidebar-overlay" type="button" aria-label="关闭侧栏"></button>
 
-      <section class="chat-pane">
-        <header class="chat-header">
-          <div class="chat-title-row">
-            <button id="mobileSidebarOpen" class="mobile-sidebar-button" type="button" aria-label="打开侧栏" aria-controls="sidebar" aria-expanded="false">☰</button>
-            <div>
-              <p class="eyebrow">当前会话</p>
-              <h2 id="sessionTitle">default</h2>
+      <div class="workspace-area">
+        <section class="main-view chat-pane active" data-main-view-panel="chat">
+          <header class="chat-header">
+            <div class="chat-title-row">
+              <button id="mobileSidebarOpen" class="mobile-sidebar-button" type="button" aria-label="打开侧栏" aria-controls="sidebar" aria-expanded="false">☰</button>
+              <div>
+                <p class="eyebrow">当前会话</p>
+                <h2 id="sessionTitle">default</h2>
+              </div>
+            </div>
+            <div class="mode-actions" aria-label="模式切换">
+              <button data-command="/hybrid" type="button">Hybrid</button>
+              <button data-command="/chat" type="button">Chat</button>
+              <button data-command="/coding" type="button">Coding</button>
+            </div>
+          </header>
+
+          <div id="chatScroll" class="chat-scroll">
+            <div id="messages" class="messages" aria-live="polite"></div>
+          </div>
+
+          <div class="composer-dock">
+            <form id="composer" class="composer">
+              <textarea id="messageInput" rows="3" placeholder="输入消息"></textarea>
+              <div class="composer-actions">
+                <span id="composerState"></span>
+                <button id="sendBtn" type="submit">发送</button>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <section class="main-view files-pane" data-main-view-panel="files">
+          <header class="tool-header">
+            <div class="chat-title-row">
+              <button class="mobile-sidebar-button mobile-secondary-open" type="button" aria-label="打开侧栏">☰</button>
+              <div>
+                <p class="eyebrow">Storage</p>
+                <h2>文件</h2>
+              </div>
+            </div>
+            <div class="file-actions">
+              <button id="fileUpBtn" class="text-button" type="button">上级</button>
+              <button id="fileUploadBtn" class="text-button" type="button">上传</button>
+              <button id="fileMkdirBtn" class="text-button" type="button">新建文件夹</button>
+            </div>
+          </header>
+          <input id="fileUploadInput" type="file" multiple hidden>
+          <div class="file-browser">
+            <div id="fileBreadcrumb" class="file-breadcrumb"></div>
+            <div id="fileList" class="file-list"></div>
+          </div>
+          <aside id="filePreview" class="file-preview"></aside>
+        </section>
+
+        <section class="main-view analysis-pane" data-main-view-panel="analysis">
+          <header class="tool-header">
+            <div class="chat-title-row">
+              <button class="mobile-sidebar-button mobile-secondary-open" type="button" aria-label="打开侧栏">☰</button>
+              <div>
+                <p class="eyebrow">Text</p>
+                <h2>分析记录</h2>
+              </div>
+            </div>
+            <a id="analysisDownloadLink" class="text-link" href="/api/files/download?path=records%2Fanalysis.txt">下载记录</a>
+          </header>
+          <div class="analysis-grid">
+            <form id="analysisForm" class="analysis-form">
+              <textarea id="analysisInput" rows="12" placeholder="粘贴需要分析的文字"></textarea>
+              <div class="composer-actions">
+                <span id="analysisState"></span>
+                <button id="analysisSubmitBtn" type="submit">分析并保存</button>
+              </div>
+            </form>
+            <div class="analysis-result">
+              <div class="panel-head">
+                <h2>回复</h2>
+              </div>
+              <pre id="analysisOutput"></pre>
             </div>
           </div>
-          <div class="mode-actions" aria-label="模式切换">
-            <button data-command="/hybrid" type="button">Hybrid</button>
-            <button data-command="/chat" type="button">Chat</button>
-            <button data-command="/coding" type="button">Coding</button>
-          </div>
-        </header>
-
-        <div id="chatScroll" class="chat-scroll">
-          <div id="messages" class="messages" aria-live="polite"></div>
-        </div>
-
-        <div class="composer-dock">
-          <form id="composer" class="composer">
-            <textarea id="messageInput" rows="3" placeholder="输入消息"></textarea>
-            <div class="composer-actions">
-              <span id="composerState"></span>
-              <button id="sendBtn" type="submit">发送</button>
-            </div>
-          </form>
-        </div>
-      </section>
+        </section>
+      </div>
     </main>
   </body>
 </html>

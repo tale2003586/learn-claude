@@ -8,6 +8,7 @@ __pycache__
 .tasks
 .team
 .transcripts
+storage
 .agents
 .codex
 .vscode
