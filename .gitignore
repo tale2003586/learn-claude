@@ -6,5 +6,8 @@ __pycache__/
 .tasks/
 .team/
 .transcripts/
+memory/RECENT_CONTEXT.json
+memory/*.md
+memory/RECENT_CONTEXT.json
 
 .env
