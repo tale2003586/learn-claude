@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from datetime import datetime, timezone
 from config import WORKDIR
@@ -18,6 +19,7 @@ class MemoryStore:
         self.pending_path = self.root / "PENDING.md"
         self.history_path = self.root / "HISTORY.md"
         self.recent_context_path = self.root / "RECENT_CONTEXT.md"
+        self.recent_context_data_path = self.root / "RECENT_CONTEXT.json"
         self._ensure_files()
 
     def _ensure_files(self) -> None:
@@ -28,6 +30,7 @@ class MemoryStore:
             self.pending_path: "# Pending Memory\n\n",
             self.history_path: "# History\n\n",
             self.recent_context_path: "# Recent Context\n\n",
+            self.recent_context_data_path: '{\n  "version": 1,\n  "turns": []\n}\n',
         }
         for path, content in defaults.items():
             if not path.exists():
@@ -80,7 +83,29 @@ class MemoryStore:
         self.recent_context_path.write_text(
             "# Recent Context\n\n" + content.strip() + "\n"
         )
+        self.recent_context_data_path.write_text(
+            '{\n  "version": 1,\n  "turns": []\n}\n'
+        )
         return "Updated RECENT_CONTEXT.md"
+
+    def read_recent_turns(self) -> list[dict]:
+        try:
+            payload = json.loads(self.recent_context_data_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return []
+        turns = payload.get("turns", []) if isinstance(payload, dict) else []
+        return [turn for turn in turns if isinstance(turn, dict)]
+
+    def write_recent_turns(self, turns: list[dict]) -> str:
+        payload = {
+            "version": 1,
+            "turns": turns,
+        }
+        self.recent_context_data_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+        )
+        self.recent_context_path.write_text(self._render_recent_turns(turns))
+        return "Updated RECENT_CONTEXT.md and RECENT_CONTEXT.json"
 
     def read_pending(self) -> str:
         return self.pending_path.read_text()
@@ -115,3 +140,31 @@ class MemoryStore:
     def _format_memory_line(self, *, tag: str, content: str, source_ref: str = "") -> str:
         source = f" (source: `{source_ref}`)" if source_ref else ""
         return f"- [{tag}] {content.strip()}{source}"
+
+    def _render_recent_turns(self, turns: list[dict]) -> str:
+        sections = ["# Recent Context"]
+        for index, turn in enumerate(turns, start=1):
+            sections.extend(
+                [
+                    f"## Turn {index}",
+                    "",
+                    f"- session: `{turn.get('session_id', '')}`",
+                    f"- mode: `{turn.get('mode', '')}`",
+                    f"- source_ref: `{turn.get('source_ref', '')}`",
+                    f"- created_at: `{turn.get('created_at', '')}`",
+                    "",
+                    "### USER_EXCERPT",
+                    "",
+                    self._trim_for_recent(str(turn.get("user_text", "")).strip()),
+                    "",
+                    "### ASSISTANT_SUMMARY",
+                    "",
+                    str(turn.get("assistant_summary", "")).strip(),
+                ]
+            )
+        return "\n\n".join(sections).rstrip() + "\n"
+
+    def _trim_for_recent(self, text: str, limit: int = 1200) -> str:
+        if len(text) <= limit:
+            return text
+        return text[:limit].rstrip() + f"... ({len(text) - limit} chars omitted)"

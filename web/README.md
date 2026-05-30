@@ -1,4 +1,4 @@
-# Agent Web Console 部署教程
+# taleclaw 部署教程
 
 这是当前项目的本地 Web 控制台。前端是原生 HTML/CSS/JS，后端用 Python 标准库 HTTP server，聊天逻辑复用 `core.bootstrap.build_runtime()`。
 
@@ -371,7 +371,7 @@ nano .env
 
 ```ini
 [Unit]
-Description=Agent Console Web UI
+Description=taleclaw Web UI
 After=network.target
 
 [Service]

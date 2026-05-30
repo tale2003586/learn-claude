@@ -7,6 +7,7 @@ import hmac
 import json
 import mimetypes
 import os
+import queue
 import shutil
 import sys
 import threading
@@ -16,7 +17,7 @@ from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 with warnings.catch_warnings():
@@ -41,7 +42,7 @@ MEMORY_FILES = [
 ]
 DEFAULT_MAX_BODY_BYTES = 52_428_800
 MAX_PREVIEW_BYTES = 1_000_000
-AUTH_REALM = "Agent Web"
+AUTH_REALM = "taleclaw"
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -99,12 +100,30 @@ class AgentService:
             raise RuntimeError(_friendly_runtime_error(self._start_error)) from self._start_error
 
     def ask(self, *, session_id: str, content: str, timeout: int = 180) -> str:
+        return self.ask_stream(
+            session_id=session_id,
+            content=content,
+            timeout=timeout,
+        )
+
+    def ask_stream(
+        self,
+        *,
+        session_id: str,
+        content: str,
+        on_text: Callable[[str], None] | None = None,
+        timeout: int = 180,
+    ) -> str:
         self.ensure_started()
         if self._loop is None:
             raise RuntimeError("Agent runtime loop is not available.")
 
         future = asyncio.run_coroutine_threadsafe(
-            self._ask_async(session_id=session_id, content=content),
+            self._ask_async(
+                session_id=session_id,
+                content=content,
+                on_text=on_text,
+            ),
             self._loop,
         )
         return future.result(timeout=timeout)
@@ -154,7 +173,13 @@ class AgentService:
         if reply_future is not None and not reply_future.done():
             reply_future.set_result(message.content)
 
-    async def _ask_async(self, *, session_id: str, content: str) -> str:
+    async def _ask_async(
+        self,
+        *,
+        session_id: str,
+        content: str,
+        on_text: Callable[[str], None] | None = None,
+    ) -> str:
         if self._runtime is None or self._turn_lock is None or self._loop is None:
             raise RuntimeError("Agent runtime is not started.")
 
@@ -167,7 +192,7 @@ class AgentService:
                     channel="web",
                     chat_id=session_id,
                 )
-                await self._runtime.run_once()
+                await self._runtime.run_once(on_text=on_text)
                 return await asyncio.wait_for(reply_future, timeout=10)
             finally:
                 self._pending.pop(session_id, None)
@@ -192,6 +217,8 @@ def read_sessions() -> list[dict[str, Any]]:
 
     sessions: list[dict[str, Any]] = []
     for row in rows:
+        if _is_internal_task_session(row):
+            continue
         channel, _, chat_id = row["id"].partition(":")
         sessions.append({
             **row,
@@ -200,6 +227,11 @@ def read_sessions() -> list[dict[str, Any]]:
             "can_chat": channel == "web" and bool(chat_id),
         })
     return sessions
+
+
+def _is_internal_task_session(row: dict[str, Any]) -> bool:
+    metadata = row.get("metadata") or {}
+    return row.get("id", "").startswith("task:") or metadata.get("kind") == "task_session"
 
 
 def read_session(session_id: str, *, raw: bool = False) -> dict[str, Any]:
@@ -331,7 +363,7 @@ def auth_credentials() -> tuple[str, str] | None:
 class RequestHandler(BaseHTTPRequestHandler):
     agent_service: AgentService
 
-    server_version = "AgentWeb/0.1"
+    server_version = "taleclaw/0.1"
 
     def do_OPTIONS(self) -> None:
         self.send_response(HTTPStatus.NO_CONTENT)
@@ -417,6 +449,10 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._handle_chat()
             return
 
+        if parsed.path == "/api/chat/stream":
+            self._handle_chat_stream()
+            return
+
         if parsed.path == "/api/analyze":
             self._handle_analyze()
             return
@@ -465,6 +501,61 @@ class RequestHandler(BaseHTTPRequestHandler):
                 },
                 status=HTTPStatus.SERVICE_UNAVAILABLE,
             )
+
+    def _handle_chat_stream(self) -> None:
+        try:
+            payload = self._read_json_body()
+            message = str(payload.get("message", "")).strip()
+            session_id = str(payload.get("session_id", "default")).strip() or "default"
+            if not message:
+                self._send_json({"error": "message is required"}, status=HTTPStatus.BAD_REQUEST)
+                return
+        except Exception as exc:
+            self._send_json(
+                {"error": str(exc), "error_type": type(exc).__name__},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+
+        events: queue.Queue[dict[str, Any]] = queue.Queue()
+
+        def run_agent() -> None:
+            try:
+                reply = self.agent_service.ask_stream(
+                    session_id=session_id,
+                    content=message,
+                    on_text=lambda text: events.put({"type": "delta", "text": text}),
+                )
+                events.put({
+                    "type": "complete",
+                    "reply": reply,
+                    "session_id": session_id,
+                    "session": read_session(session_id),
+                })
+            except Exception as exc:
+                traceback.print_exc()
+                events.put({
+                    "type": "error",
+                    "error": _friendly_runtime_error(exc),
+                    "error_type": type(exc).__name__,
+                })
+
+        worker = threading.Thread(
+            target=run_agent,
+            name=f"agent-web-stream-{session_id}",
+            daemon=True,
+        )
+        worker.start()
+
+        self._send_stream_headers()
+        while True:
+            event = events.get()
+            try:
+                self._send_stream_event(event)
+            except (BrokenPipeError, ConnectionResetError):
+                return
+            if event["type"] in {"complete", "error"}:
+                return
 
     def _handle_analyze(self) -> None:
         try:
@@ -653,6 +744,19 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_stream_headers(self) -> None:
+        self.send_response(HTTPStatus.OK)
+        self._send_cors_headers()
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache, no-transform")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
+    def _send_stream_event(self, payload: dict[str, Any]) -> None:
+        line = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8") + b"\n"
+        self.wfile.write(line)
+        self.wfile.flush()
+
     def _send_static(self, request_path: str) -> None:
         target = self._static_target(request_path)
         if target is None:
@@ -741,7 +845,7 @@ def main() -> None:
     server = ThreadingHTTPServer((args.host, args.port), build_handler(agent_service))
     server.daemon_threads = True
     url = f"http://{args.host}:{args.port}"
-    print(f"Agent web UI running at {url}")
+    print(f"taleclaw running at {url}")
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()

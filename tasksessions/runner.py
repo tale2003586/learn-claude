@@ -1,8 +1,11 @@
 from core.context import ContextBuilder
 from core.pipeline import Pipeline, get_last_assistant_text
-from memory.lifecycle import MemoryLifecycle
+from config import WORKDIR
 from memory.store import MemoryStore
 from sessions import SessionManager
+from .artifacts import TaskArtifactPaths, TaskArtifactWriter
+from .conclusions import TaskConclusionExtractor
+from .memory_lifecycle import TaskMemoryLifecycle
 from .promotion import TaskMemoryPromoter, PromotionResult
 from .session import TaskSessionFactory, TaskSessionRecord
 
@@ -20,6 +23,11 @@ class TaskSessionRunner:
         self.global_memory = global_memory
         self.factory = TaskSessionFactory(sessions)
         self.promoter = TaskMemoryPromoter(global_memory)
+        self.conclusion_extractor = TaskConclusionExtractor(
+            provider=base_pipeline.provider,
+            model=base_pipeline.model,
+        )
+        self.artifact_writer = TaskArtifactWriter()
 
     def run_coding_task(self, *, parent_session, user_text: str, profile) -> str:
         record = self.factory.create(
@@ -44,14 +52,35 @@ class TaskSessionRunner:
         reply = get_last_assistant_text(record.session.messages)
         record.session.metadata["status"] = "completed"
         record.session.metadata["task_reply"] = reply
-        self.sessions.save(record.session)
 
+        extraction = self.conclusion_extractor.extract(
+            user_request=user_text,
+            task_summary=reply,
+            messages=record.session.messages,
+        )
         promotion = self.promoter.promote(
             task_id=record.task_id,
             task_memory=task_memory,
-            task_summary=reply,
+            extracted_conclusions=extraction.candidates,
         )
-        return self._format_parent_reply(record, reply, promotion)
+        artifacts = None
+        try:
+            artifacts = self.artifact_writer.write(
+                record=record,
+                user_request=user_text,
+                task_reply=reply,
+                extraction=extraction,
+                promotion=promotion,
+            )
+            record.session.metadata["task_log_path"] = _portable_path(artifacts.task_log_path)
+            record.session.metadata["conclusions_path"] = _portable_path(artifacts.conclusions_path)
+        except Exception as exc:
+            record.session.metadata["artifact_error"] = f"{type(exc).__name__}: {exc}"
+
+        if extraction.error:
+            record.session.metadata["conclusion_extraction_error"] = extraction.error
+        self.sessions.save(record.session)
+        return self._format_parent_reply(record, reply, promotion, artifacts)
 
     def _build_task_pipeline(self, task_memory: MemoryStore) -> Pipeline:
         return Pipeline(
@@ -60,7 +89,7 @@ class TaskSessionRunner:
             model=self.base_pipeline.model,
             tool_executor=self.base_pipeline.tool_executor,
             context_builder=ContextBuilder(memory_store=task_memory),
-            memory_lifecycle=MemoryLifecycle(task_memory),
+            memory_lifecycle=TaskMemoryLifecycle(task_memory),
             max_tokens=self.base_pipeline.max_tokens,
         )
 
@@ -89,7 +118,9 @@ class TaskSessionRunner:
             f"<task-session parent_session=\"{parent_session_id}\">\n"
             "You are running in an isolated coding task session. "
             "Use the task-local context for intermediate work. "
-            "Only durable project conventions or important findings should be memorized.\n"
+            "Only durable project conventions or important findings should be memorized. "
+            "When you discover a reusable project conclusion, call memorize with "
+            "section='pending' so it can be reviewed for global promotion.\n"
             "</task-session>\n\n"
             "<global-memory-snapshot>\n"
             f"{global_memory}\n"
@@ -102,6 +133,7 @@ class TaskSessionRunner:
         record: TaskSessionRecord,
         reply: str,
         promotion: PromotionResult,
+        artifacts: TaskArtifactPaths | None,
     ) -> str:
         lines = [
             f"[TaskSession `{record.task_id}` completed]",
@@ -118,4 +150,23 @@ class TaskSessionRunner:
                 "",
                 f"Skipped {len(promotion.skipped)} duplicate task memory item(s).",
             ])
+        if promotion.rejected:
+            lines.extend([
+                "",
+                f"Rejected {len(promotion.rejected)} noisy task memory candidate(s).",
+            ])
+        if artifacts is not None:
+            lines.extend([
+                "",
+                f"Task log: `{_portable_path(artifacts.task_log_path)}`",
+                f"Conclusions: `{_portable_path(artifacts.conclusions_path)}`",
+            ])
         return "\n".join(lines)
+
+
+def _portable_path(path) -> str:
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(WORKDIR.resolve()).as_posix()
+    except ValueError:
+        return str(resolved)

@@ -1,3 +1,5 @@
+from typing import Callable
+
 from bus.user_bus import OutboundMessage, MessageBus
 from core.pipeline import Pipeline
 from modes.router import ModeRouter
@@ -21,7 +23,7 @@ class AgentLoop:
         self.plugin_manager = plugin_manager
         self.task_session_runner = task_session_runner
 
-    async def run_once(self) -> None:
+    async def run_once(self, on_text: Callable[[str], None] | None = None) -> None:
         inbound = await self.bus.consume_inbound()
 
         session = self.sessions.get_or_create(inbound.session_key)
@@ -30,6 +32,7 @@ class AgentLoop:
             plugin_result = self.plugin_manager.before_turn(inbound, session)
             if plugin_result.abort:
                 self.sessions.save(session)
+                self._emit_text(on_text, plugin_result.reply)
                 await self.bus.publish_outbound(OutboundMessage(
                     channel=inbound.channel,
                     chat_id=inbound.chat_id,
@@ -40,11 +43,27 @@ class AgentLoop:
         route = self.router.route(session, inbound.content)
 
         if route.switched:
+            reply = route.switch_message or ""
+            session.add_message(
+                "user",
+                inbound.content,
+                media=inbound.media,
+                metadata=inbound.metadata,
+            )
+            session.add_message(
+                "assistant",
+                reply,
+                metadata={
+                    "kind": "mode_switch",
+                    "mode": session.current_mode,
+                },
+            )
             self.sessions.save(session)
+            self._emit_text(on_text, reply)
             await self.bus.publish_outbound(OutboundMessage(
                 channel=inbound.channel,
                 chat_id=inbound.chat_id,
-                content=route.switch_message or "",
+                content=reply,
             ))
             return
 
@@ -65,8 +84,9 @@ class AgentLoop:
                 profile=route.profile,
             )
             session.add_message("assistant", reply)
+            self._emit_text(on_text, reply)
         else:
-            reply = self.pipeline.run(session, route.profile)
+            reply = self.pipeline.run(session, route.profile, on_text=on_text)
 
         if self.plugin_manager is not None:
             self.plugin_manager.after_turn(inbound, session, reply)
@@ -78,3 +98,11 @@ class AgentLoop:
             chat_id=inbound.chat_id,
             content=reply,
         ))
+
+    def _emit_text(
+        self,
+        on_text: Callable[[str], None] | None,
+        content: str,
+    ) -> None:
+        if on_text is not None and content:
+            on_text(content)

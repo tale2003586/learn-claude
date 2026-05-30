@@ -315,6 +315,13 @@ button {
   background: #eef3f7;
 }
 
+.mode-actions button.active {
+  color: var(--accent-dark);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 700;
+}
+
 .text-button:disabled,
 .file-row-actions button:disabled {
   cursor: default;
@@ -619,6 +626,29 @@ button {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   line-height: 1.58;
+}
+
+.message.streaming .message-body::after {
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  margin-left: 4px;
+  border-radius: 1px;
+  background: var(--accent);
+  content: "";
+  vertical-align: -2px;
+  animation: stream-cursor 900ms steps(2, jump-none) infinite;
+}
+
+.message.error .message-body {
+  border-color: #fed7aa;
+  background: var(--warm-soft);
+}
+
+@keyframes stream-cursor {
+  50% {
+    opacity: 0.2;
+  }
 }
 
 .message.user .message-body {

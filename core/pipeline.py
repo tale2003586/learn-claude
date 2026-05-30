@@ -3,6 +3,7 @@ from core.compact import auto_compact, estimate_tokens, micro_compact
 from config import THRESHOLD
 from bus.team_bus import BUS
 from tools.executor import ToolExecutionRequest
+from typing import Callable
 
 
 class Pipeline:
@@ -28,11 +29,21 @@ class Pipeline:
         self.tool_executor = tool_executor
         self.memory_lifecycle = memory_lifecycle
 
-    def run(self, session, profile) -> str:
-        self._run_turn(session, profile)
+    def run(
+        self,
+        session,
+        profile,
+        on_text: Callable[[str], None] | None = None,
+    ) -> str:
+        self._run_turn(session, profile, on_text=on_text)
         return get_last_assistant_text(session.messages)
 
-    def _run_turn(self, session, profile) -> None:
+    def _run_turn(
+        self,
+        session,
+        profile,
+        on_text: Callable[[str], None] | None = None,
+    ) -> None:
         self._before_turn(session)
 
         while True:
@@ -42,6 +53,7 @@ class Pipeline:
                 session=session,
                 context=turn_context,
                 profile=profile,
+                on_text=on_text,
             )
 
             self._after_reasoning_step(session, response)
@@ -85,14 +97,22 @@ class Pipeline:
             background_results=notifs,
         )
 
-    def _reasoning_step(self, *, session, context, profile):
-        return self.provider.chat(
+    def _reasoning_step(self, *, session, context, profile, on_text=None):
+        use_stream = on_text is not None and hasattr(self.provider, "stream_chat")
+        method = self.provider.chat
+        if use_stream:
+            method = self.provider.stream_chat
+        response = method(
             model=self.model,
             messages=context.messages,
             tools=self.tools.schemas_for_turn(session, profile.tool_mode),
             tool_choice="auto",
             max_tokens=self.max_tokens,
+            **({"on_text": on_text} if use_stream else {}),
         )
+        if on_text is not None and not use_stream and response.content:
+            on_text(response.content)
+        return response
 
     def _after_reasoning_step(self, session, response) -> None:
         if response.raw_message:

@@ -1,5 +1,6 @@
 import asyncio
 from dataclasses import dataclass, field
+from typing import Callable
 
 from bus.events import InboundMessage
 from bus.user_bus import MessageBus
@@ -38,5 +39,5 @@ class AppRuntime:
             content=content,
         ))
 
-    async def run_once(self) -> None:
-        await self.loop.run_once()
+    async def run_once(self, on_text: Callable[[str], None] | None = None) -> None:
+        await self.loop.run_once(on_text=on_text)

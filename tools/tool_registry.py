@@ -41,6 +41,10 @@ DEFERRED_TOOLS = {
 }
 
 UNLOCKED_TOOLS_KEY = "unlocked_tools"
+SESSION_SCOPED_TOOLS = {
+    "memorize",
+    "recall_memory",
+}
 
 
 @dataclass
@@ -139,7 +143,10 @@ class ToolRegistry:
             )
 
         try:
-            return tool.handler(**args)
+            handler_args = dict(args)
+            if name in SESSION_SCOPED_TOOLS:
+                handler_args["_session"] = session
+            return tool.handler(**handler_args)
         except Exception as e:
             return f"Error: {e}"
 

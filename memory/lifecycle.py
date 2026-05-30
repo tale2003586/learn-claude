@@ -1,5 +1,8 @@
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
+from memory.archive_store import ArchivedRecentTurn, MemoryArchiveStore
+from memory.history_summary import HistorySummarizer
 from memory.store import MemoryStore
 
 
@@ -8,20 +11,24 @@ class MemoryLifecycleResult:
     pending_added: int = 0
     history_updated: bool = False
     recent_context_updated: bool = False
+    archived_count: int = 0
 
 
 class MemoryLifecycle:
-    """Small Markdown memory lifecycle.
+    """Derived memory lifecycle layered on top of the raw session transcript."""
 
-    First version:
-    - explicit "remember" user requests go directly to MEMORY.md
-    - likely durable preferences/project conventions go to PENDING.md
-    - every completed turn appends a compact HISTORY.md entry
-    - RECENT_CONTEXT.md keeps a tiny rolling summary of the latest turn
-    """
-
-    def __init__(self, store: MemoryStore) -> None:
+    def __init__(
+        self,
+        store: MemoryStore,
+        *,
+        summarizer: HistorySummarizer | None = None,
+        archive_store: MemoryArchiveStore | None = None,
+        recent_limit: int = 6,
+    ) -> None:
         self.store = store
+        self.summarizer = summarizer or HistorySummarizer()
+        self.archive_store = archive_store
+        self.recent_limit = max(1, recent_limit)
 
     def after_turn(self, session) -> MemoryLifecycleResult:
         user_text = self._last_text(session.messages, "user")
@@ -48,14 +55,30 @@ class MemoryLifecycle:
                 if save_result.startswith("Saved"):
                     result.pending_added += 1
 
-        history = self._format_history_entry(user_text, assistant_text)
+        assistant_summary = self.summarizer.summarize(assistant_text)
+        history = self._format_history_entry(user_text, assistant_summary)
         if history:
             self.store.append_history(history, source_ref=source_ref)
             result.history_updated = True
 
-        recent = self._format_recent_context(session, user_text, assistant_text)
-        self.store.write_recent_context(recent)
+        recent_turns = self.store.read_recent_turns()
+        recent_turns.append(
+            self._format_recent_turn(
+                session,
+                user_text,
+                assistant_summary,
+                source_ref=source_ref,
+            )
+        )
+        evicted_turns = recent_turns[:-self.recent_limit]
+        self.store.write_recent_turns(recent_turns[-self.recent_limit :])
         result.recent_context_updated = True
+
+        if self.archive_store:
+            for turn in evicted_turns:
+                archived = self.archive_store.append(ArchivedRecentTurn(**turn))
+                if archived:
+                    result.archived_count += 1
         return result
 
     def _last_text(self, messages: list[dict], role: str) -> str:
@@ -111,24 +134,31 @@ class MemoryLifecycle:
             return "preference"
         return "candidate"
 
-    def _format_history_entry(self, user_text: str, assistant_text: str) -> str:
+    def _format_history_entry(self, user_text: str, assistant_summary: str) -> str:
         parts = []
         if user_text:
-            parts.append(f"USER: {self._trim(user_text, 800)}")
-        if assistant_text:
-            parts.append(f"ASSISTANT: {self._trim(assistant_text, 800)}")
+            parts.append(f"USER:\n{user_text}")
+        if assistant_summary:
+            parts.append(f"ASSISTANT_SUMMARY:\n{assistant_summary}")
         return "\n\n".join(parts)
 
-    def _format_recent_context(self, session, user_text: str, assistant_text: str) -> str:
-        lines = [
-            f"- session: `{session.id}`",
-            f"- mode: `{session.current_mode}`",
-        ]
-        if user_text:
-            lines.append(f"- latest_user: {self._trim(user_text, 300)}")
-        if assistant_text:
-            lines.append(f"- latest_assistant: {self._trim(assistant_text, 300)}")
-        return "\n".join(lines)
+    def _format_recent_turn(
+        self,
+        session,
+        user_text: str,
+        assistant_summary: str,
+        *,
+        source_ref: str,
+    ) -> dict:
+        return {
+            "session_id": session.id,
+            "mode": session.current_mode,
+            "user_text": user_text,
+            "assistant_summary": assistant_summary,
+            "source_ref": source_ref,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": {},
+        }
 
     def _trim(self, text: str, limit: int) -> str:
         if len(text) <= limit:

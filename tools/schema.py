@@ -393,8 +393,11 @@ MEMORY_TOOLS = [
             },
             "section": {
                 "type": "string",
-                "enum": ["memory", "self", "now"],
-                "description": "Where to save it. Defaults to memory.",
+                "enum": ["memory", "self", "now", "pending"],
+                "description": (
+                    "Where to save it. Defaults to memory. In a coding task, use pending "
+                    "for durable project conclusions that should be reviewed for promotion."
+                ),
             },
         },
         ["content"],

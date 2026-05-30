@@ -36,6 +36,13 @@ class TaskSessionFactory:
     ) -> TaskSessionRecord:
         task_id = f"{_slug(task_type)}-{uuid4().hex[:8]}"
         session_id = f"task:{task_id}"
+        memory_root = self.root / task_id / "memory"
+        memory_root.mkdir(parents=True, exist_ok=True)
+        resolved_memory_root = memory_root.resolve()
+        try:
+            stored_memory_root = str(resolved_memory_root.relative_to(WORKDIR.resolve()))
+        except ValueError:
+            stored_memory_root = str(resolved_memory_root)
         session = self.sessions.get_or_create(session_id)
         session.current_mode = task_type
         session.metadata.update({
@@ -45,9 +52,8 @@ class TaskSessionFactory:
             "parent_session_id": parent_session_id,
             "status": "running",
             "user_request": user_request,
+            "memory_root": stored_memory_root,
         })
-        memory_root = self.root / task_id / "memory"
-        memory_root.mkdir(parents=True, exist_ok=True)
         return TaskSessionRecord(
             session=session,
             task_id=task_id,

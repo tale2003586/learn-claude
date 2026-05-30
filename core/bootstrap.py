@@ -11,6 +11,8 @@ from tools.tool_registry import build_lead_tool_registry
 from modes.router import ModeRouter
 from sessions import SessionManager
 from tasksessions import TaskSessionRunner
+from memory.archive_store import MemoryArchiveStore
+from memory.history_summary import HistorySummarizer
 from memory.lifecycle import MemoryLifecycle
 from memory.store import MemoryStore
 from plugins import PluginManager
@@ -27,8 +29,13 @@ def build_runtime() -> AppRuntime:
     provider = OpenAICompatibleProvider(client)
 
     memory_store = MemoryStore()
+    memory_archive_store = MemoryArchiveStore()
     context_builder = ContextBuilder(memory_store=memory_store)
-    memory_lifecycle = MemoryLifecycle(memory_store)
+    memory_lifecycle = MemoryLifecycle(
+        memory_store,
+        summarizer=HistorySummarizer(provider=provider, model=MODEL),
+        archive_store=memory_archive_store,
+    )
 
     plugin_manager = PluginManager(
         [

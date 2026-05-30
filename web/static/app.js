@@ -85,6 +85,45 @@ async function fetchJson(url, options = {}) {
   return data;
 }
 
+async function fetchJsonStream(url, options = {}, onEvent = () => {}) {
+  const headers = new Headers(options.headers || {});
+  if (!(options.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  const response = await fetch(url, {
+    ...options,
+    headers,
+  });
+  if (!response.ok) {
+    const contentType = response.headers.get("Content-Type") || "";
+    const data = contentType.includes("application/json")
+      ? await response.json()
+      : { error: await response.text() };
+    throw new Error(data.error || `HTTP ${response.status}`);
+  }
+  if (!response.body) {
+    throw new Error("当前浏览器不支持流式响应");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      onEvent(JSON.parse(line));
+    }
+    if (done) break;
+  }
+  if (buffer.trim()) {
+    onEvent(JSON.parse(buffer));
+  }
+}
+
 function setStatus(text, kind = "") {
   els.statusBadge.textContent = text;
   els.statusBadge.className = `status-badge ${kind}`.trim();
@@ -169,6 +208,16 @@ function updateMetrics(session = {}) {
   els.modeMetric.textContent = mode;
   els.sessionCountMetric.textContent = String(state.sessions.length);
   els.memoryCountMetric.textContent = String(state.memoryFiles.length);
+  const activeCommand = {
+    hybrid: "/hybrid",
+    bot: "/chat",
+    coding: "/coding",
+  }[mode];
+  for (const button of els.modeActions.querySelectorAll("[data-command]")) {
+    const active = button.dataset.command === activeCommand;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  }
 }
 
 function messageText(message) {
@@ -635,15 +684,32 @@ async function sendMessage(message) {
     els.messages.innerHTML = "";
   }
   renderOptimisticUserMessage(message);
+  const streamingMessage = renderStreamingAssistantMessage();
 
   try {
-    const data = await fetchJson("/api/chat", {
+    let data = null;
+    await fetchJsonStream("/api/chat/stream", {
       method: "POST",
       body: JSON.stringify({
         session_id: state.sessionId,
         message,
       }),
+    }, (event) => {
+      if (event.type === "delta") {
+        streamingMessage.body.textContent += event.text || "";
+        scrollMessagesToBottom();
+        return;
+      }
+      if (event.type === "error") {
+        throw new Error(event.error || "流式请求失败");
+      }
+      if (event.type === "complete") {
+        data = event;
+      }
     });
+    if (!data) {
+      throw new Error("流式响应意外结束");
+    }
     const savedMessages = data.session?.messages || [];
     state.currentMode = data.session?.current_mode || state.currentMode;
     renderMessages(savedMessages.length > 0
@@ -655,12 +721,15 @@ async function sendMessage(message) {
     updateMetrics(data.session || {});
     await loadSessions();
   } catch (error) {
-    renderMessages([
-      { role: "user", content: message },
-      { role: "assistant", content: error.message },
-    ]);
+    const partial = streamingMessage.body.textContent.trim();
+    streamingMessage.item.classList.remove("streaming");
+    streamingMessage.item.classList.add("error");
+    streamingMessage.body.textContent = partial
+      ? `${partial}\n\n[请求中断：${error.message}]`
+      : error.message;
     setStatus("异常", "error");
   } finally {
+    streamingMessage.item.classList.remove("streaming");
     setBusy(false);
     await loadMemory();
   }
@@ -688,6 +757,23 @@ function renderOptimisticUserMessage(message) {
   item.append(role, body);
   els.messages.append(item);
   scrollMessagesToBottom();
+}
+
+function renderStreamingAssistantMessage() {
+  const item = document.createElement("article");
+  item.className = "message assistant streaming";
+
+  const role = document.createElement("div");
+  role.className = "message-role";
+  role.textContent = "Agent";
+
+  const body = document.createElement("div");
+  body.className = "message-body";
+
+  item.append(role, body);
+  els.messages.append(item);
+  scrollMessagesToBottom();
+  return { item, body };
 }
 
 function newSession() {

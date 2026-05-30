@@ -1,0 +1,106 @@
+import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from core.provider import OpenAICompatibleProvider
+from web.server import RequestHandler
+
+
+def _chunk(*, content=None, tool_calls=None):
+    delta = SimpleNamespace(content=content, tool_calls=tool_calls or [])
+    return SimpleNamespace(choices=[SimpleNamespace(delta=delta)])
+
+
+def _tool_delta(index, *, call_id=None, name=None, arguments=None):
+    function = SimpleNamespace(name=name, arguments=arguments)
+    return SimpleNamespace(index=index, id=call_id, function=function)
+
+
+class StreamingProviderTests(unittest.TestCase):
+    def test_stream_chat_emits_text_and_reassembles_tool_arguments(self) -> None:
+        chunks = [
+            _chunk(content="正在"),
+            _chunk(content="处理"),
+            _chunk(tool_calls=[
+                _tool_delta(0, call_id="call_1", name="read_", arguments='{"pa'),
+            ]),
+            _chunk(tool_calls=[
+                _tool_delta(0, name="file", arguments='th":"README.md"}'),
+            ]),
+        ]
+
+        class Completions:
+            def __init__(self) -> None:
+                self.kwargs = None
+
+            def create(self, **kwargs):
+                self.kwargs = kwargs
+                return chunks
+
+        completions = Completions()
+        client = SimpleNamespace(
+            chat=SimpleNamespace(completions=completions),
+        )
+        emitted = []
+
+        response = OpenAICompatibleProvider(client).stream_chat(
+            model="test-model",
+            messages=[{"role": "user", "content": "read it"}],
+            tools=[{"type": "function"}],
+            tool_choice="auto",
+            max_tokens=100,
+            on_text=emitted.append,
+        )
+
+        self.assertTrue(completions.kwargs["stream"])
+        self.assertEqual(["正在", "处理"], emitted)
+        self.assertEqual("正在处理", response.content)
+        self.assertEqual("call_1", response.tool_calls[0].id)
+        self.assertEqual("read_file", response.tool_calls[0].name)
+        self.assertEqual({"path": "README.md"}, response.tool_calls[0].arguments)
+        self.assertEqual("read_file", response.raw_message["tool_calls"][0]["function"]["name"])
+
+
+class StreamingHttpTests(unittest.TestCase):
+    def test_chat_stream_endpoint_returns_delta_and_complete_events(self) -> None:
+        class AgentService:
+            def ask_stream(self, *, session_id, content, on_text):
+                self.request = (session_id, content)
+                on_text("你")
+                on_text("好")
+                return "你好"
+
+        agent_service = AgentService()
+        handler = object.__new__(RequestHandler)
+        handler.agent_service = agent_service
+        handler._read_json_body = lambda: {
+            "session_id": "default",
+            "message": "hello",
+        }
+        handler._send_stream_headers = lambda: None
+        events = []
+        handler._send_stream_event = events.append
+
+        with patch("web.server.read_session", return_value={"messages": []}):
+            handler._handle_chat_stream()
+
+        self.assertEqual(("default", "hello"), agent_service.request)
+        self.assertEqual(["delta", "delta", "complete"], [event["type"] for event in events])
+        self.assertEqual("你好", events[-1]["reply"])
+
+    def test_stream_headers_disable_nginx_buffering(self) -> None:
+        handler = object.__new__(RequestHandler)
+        headers = []
+        handler.send_response = lambda status: None
+        handler._send_cors_headers = lambda: None
+        handler.send_header = lambda name, value: headers.append((name, value))
+        handler.end_headers = lambda: None
+
+        handler._send_stream_headers()
+
+        self.assertIn(("X-Accel-Buffering", "no"), headers)
+        self.assertIn(("Content-Type", "application/x-ndjson; charset=utf-8"), headers)
+
+
+if __name__ == "__main__":
+    unittest.main()

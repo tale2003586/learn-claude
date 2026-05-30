@@ -191,11 +191,39 @@ TEAMMATE_HANDLER = make_teammate_handlers("")
 
 
 MEMORY = MemoryStore()
+TASK_MEMORY_ROOT = (WORKDIR / ".task_sessions").resolve()
+
+
+def memory_store_for_session(session=None) -> MemoryStore:
+    metadata = getattr(session, "metadata", {}) or {}
+    if metadata.get("kind") != "task_session":
+        return MEMORY
+
+    task_id = str(metadata.get("task_id", "")).strip()
+    if not task_id:
+        raise ValueError("Task session is missing task_id metadata.")
+
+    configured_root = metadata.get("memory_root")
+    if configured_root:
+        root = Path(str(configured_root))
+        if not root.is_absolute():
+            root = WORKDIR / root
+        root = root.resolve()
+    else:
+        root = (TASK_MEMORY_ROOT / task_id / "memory").resolve()
+    if not root.is_relative_to(TASK_MEMORY_ROOT):
+        raise ValueError("Task memory root escapes .task_sessions.")
+    return MemoryStore(root)
+
+
+def run_memorize(*, content: str, section: str = "memory", _session=None) -> str:
+    return memory_store_for_session(_session).append(section, content)
+
+
+def run_recall_memory(*, query: str | None = None, _session=None) -> str:
+    return memory_store_for_session(_session).recall(query)
 
 MEMORY_HANDLERS = {
-    "memorize": lambda **kw: MEMORY.append(
-        kw.get("section", "memory"),
-        kw["content"],
-    ),
-    "recall_memory": lambda **kw: MEMORY.recall(kw.get("query")),
+    "memorize": run_memorize,
+    "recall_memory": run_recall_memory,
 }
