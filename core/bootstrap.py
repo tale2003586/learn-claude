@@ -18,6 +18,8 @@ from memory.store import MemoryStore
 from plugins import PluginManager
 from plugins.shell_safety import ShellSafetyPlugin
 from plugins.status_commands import StatusCommandsPlugin
+from plugins.web_search import WebSearchPlugin
+from plugins.scheduler import SchedulerPlugin
 
 
 def build_runtime() -> AppRuntime:
@@ -41,6 +43,8 @@ def build_runtime() -> AppRuntime:
         [
             ShellSafetyPlugin(),
             StatusCommandsPlugin(),
+            WebSearchPlugin(),
+            SchedulerPlugin(),
         ],
         workspace=WORKDIR,
         tool_registry=tools,

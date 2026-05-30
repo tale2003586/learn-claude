@@ -23,3 +23,23 @@ services:
       - ./.tasks:/app/.tasks
       - ./.team:/app/.team
       - ./.transcripts:/app/.transcripts
+      - ./.scheduler:/app/.scheduler
+
+  scheduler-worker:
+    build:
+      context: .
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.12-slim}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+        PIP_EXTRA_INDEX_URL: ${PIP_EXTRA_INDEX_URL:-}
+        PIP_TRUSTED_HOST: ${PIP_TRUSTED_HOST:-}
+        PIP_DEFAULT_TIMEOUT: ${PIP_DEFAULT_TIMEOUT:-180}
+        PIP_RETRIES: ${PIP_RETRIES:-10}
+    container_name: taleclaw-scheduler
+    restart: unless-stopped
+    env_file:
+      - ${AGENT_CONSOLE_ENV_FILE:-.env}
+    command: ["python", "scheduler_worker.py"]
+    volumes:
+      - ./storage:/app/storage
+      - ./.scheduler:/app/.scheduler
