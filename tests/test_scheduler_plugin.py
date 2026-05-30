@@ -4,12 +4,30 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
+from core.context import ContextBuilder
+from core.pipeline import Pipeline
+from core.provider import LLMResponse, ToolCall
+from memory.store import MemoryStore
+from plugins.scheduler.agent_runner import ScheduledAgentRunner
+from plugins.scheduler.planning import (
+    ScheduledTaskDraft,
+    ScheduledTaskPlan,
+    ToolCapabilityAuditor,
+)
 from plugins.scheduler.plugin import SchedulerPlugin
+from plugins.scheduler.policy import ToolApprovalPolicyHook
 from plugins.scheduler.reports import ScheduledReportService
 from plugins.scheduler.store import ScheduleStore
 from plugins.scheduler.workflow import WorkflowExecutor, validate_workflow
 from plugins.web_search.client import TavilySearchClient
+from plugins.web_search.plugin import WebSearchPlugin
 from scheduler_worker import SchedulerWorker
+from sessions import SessionManager
+from tasksessions.conclusions import ConclusionExtraction
+from tasksessions.promotion import PromotionResult
+from tools.executor import ToolExecutionRequest, ToolExecutor
+from tools.schema import function_tool
+from tools.tool_registry import ToolRegistry
 
 
 class FakeSearchClient:
@@ -38,6 +56,23 @@ class FakeAnalysisClient:
         if self.error:
             raise self.error
         return "## Trend\n\nAI Agent tooling is maturing."
+
+
+def _register_tool(
+    registry: ToolRegistry,
+    name: str,
+    *,
+    risk: str = "low",
+    handler=None,
+    enabled_modes: set[str] | None = None,
+) -> None:
+    registry.register(
+        function_tool(name, f"{name} description", {}, []),
+        handler or (lambda **kwargs: "ok"),
+        risk=risk,
+        enabled_modes=enabled_modes,
+        source=f"test:{name}",
+    )
 
 
 class TavilySearchClientTests(unittest.TestCase):
@@ -168,6 +203,7 @@ class ScheduleStoreTests(unittest.TestCase):
             self.assertEqual([], schedule["requested_tools"])
             self.assertEqual([], schedule["approved_capabilities"])
             self.assertEqual({}, schedule["limits"])
+            self.assertEqual({}, schedule["plan"])
 
             with sqlite3.connect(db_path) as conn:
                 schedule_columns = {
@@ -184,6 +220,7 @@ class ScheduleStoreTests(unittest.TestCase):
                 "requested_tools_json",
                 "approved_capabilities_json",
                 "limits_json",
+                "plan_json",
             }.issubset(schedule_columns))
             self.assertTrue({
                 "task_session_id",
@@ -223,6 +260,273 @@ class ScheduleStoreTests(unittest.TestCase):
                 run["trace_path"],
             )
             self.assertEqual("bash", run["approval_request"]["tool"])
+
+    def test_agent_draft_can_be_approved_and_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ScheduleStore(Path(tmp) / "schedules.db")
+            schedule = store.create_agent_draft(
+                name="daily-agent",
+                task_prompt="Generate a report.",
+                hour=8,
+                plan={"summary": "Daily report"},
+                approval_status="awaiting_approval",
+                requested_tools=["web_search", "read_file"],
+                approved_capabilities=[{
+                    "tool": "web_search",
+                    "risk": "low",
+                    "scope": {},
+                }],
+                limits={"max_tool_calls": 8},
+            )
+
+            self.assertEqual("agent", schedule["schedule_type"])
+            self.assertEqual([], schedule["workflow"])
+            self.assertEqual("Daily report", schedule["plan"]["summary"])
+            self.assertEqual([schedule], store.list_pending_agents())
+
+            approved = store.update_agent_approval(
+                schedule["id"],
+                approved_capabilities=[
+                    {
+                        "tool": "read_file",
+                        "risk": "normal",
+                        "scope": {"paths": ["docs"]},
+                    },
+                    {
+                        "tool": "web_search",
+                        "risk": "low",
+                        "scope": {},
+                    },
+                ],
+                approval_status="active",
+            )
+            self.assertEqual("active", approved["approval_status"])
+            self.assertEqual([], store.list_pending_agents())
+
+            rejected = store.reject_agent(schedule["id"])
+            self.assertEqual("rejected", rejected["approval_status"])
+            self.assertFalse(rejected["enabled"])
+
+
+class ToolApprovalPolicyHookTests(unittest.TestCase):
+    def test_hook_pauses_unapproved_or_out_of_scope_tool_call(self) -> None:
+        metadata = {
+            "kind": "scheduled_agent",
+            "automation_limits": {"max_tool_calls": 4, "timeout_seconds": 300},
+            "approved_capabilities": [{
+                "tool": "bash",
+                "risk": "high",
+                "scope": {"commands": ["python scripts/report.py"]},
+            }],
+        }
+        hook = ToolApprovalPolicyHook()
+
+        allowed = hook.before(ToolExecutionRequest(
+            call_id="1",
+            tool_name="bash",
+            arguments={"command": "python scripts/report.py"},
+            metadata=metadata,
+        ))
+        denied = hook.before(ToolExecutionRequest(
+            call_id="2",
+            tool_name="bash",
+            arguments={"command": "rm -rf storage"},
+            metadata=metadata,
+        ))
+
+        self.assertIsNone(allowed.deny_reason)
+        self.assertIn("paused for approval", denied.deny_reason)
+        self.assertEqual("bash", metadata["runtime_approval_request"]["tool"])
+
+    def test_hook_blocks_forbidden_tool_even_if_metadata_is_tampered(self) -> None:
+        hook = ToolApprovalPolicyHook()
+        outcome = hook.before(ToolExecutionRequest(
+            call_id="1",
+            tool_name="schedule_create",
+            arguments={},
+            metadata={
+                "kind": "scheduled_agent",
+                "approved_capabilities": [{
+                    "tool": "schedule_create",
+                    "risk": "low",
+                    "scope": {},
+                }],
+            },
+        ))
+
+        self.assertIn("forbidden", outcome.deny_reason)
+
+
+class ScheduledAgentRunnerTests(unittest.TestCase):
+    def _base_pipeline(self, *, workspace: Path, provider, registry: ToolRegistry) -> Pipeline:
+        return Pipeline(
+            tools=registry,
+            provider=provider,
+            model="test-model",
+            tool_executor=ToolExecutor([]),
+            context_builder=ContextBuilder(memory_store=MemoryStore(workspace / "memory")),
+        )
+
+    def _runner(self, *, workspace: Path, store, sessions, provider, registry):
+        class Extractor:
+            def extract(self, **kwargs):
+                return ConclusionExtraction(summary="Completed report.")
+
+        class Promoter:
+            def promote(self, **kwargs):
+                return PromotionResult()
+
+        return ScheduledAgentRunner(
+            store=store,
+            sessions=sessions,
+            base_pipeline=self._base_pipeline(
+                workspace=workspace,
+                provider=provider,
+                registry=registry,
+            ),
+            global_memory=MemoryStore(workspace / "global_memory"),
+            workspace=workspace,
+            conclusion_extractor=Extractor(),
+            promoter=Promoter(),
+        )
+
+    def test_runner_executes_approved_tool_in_isolated_session(self) -> None:
+        class Provider:
+            def __init__(self):
+                self.calls = 0
+
+            def chat(self, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return LLMResponse(
+                        content=None,
+                        tool_calls=[ToolCall(
+                            id="call-1",
+                            name="web_search",
+                            arguments={"query": "latest AI"},
+                        )],
+                        raw_message={
+                            "role": "assistant",
+                            "tool_calls": [{
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {
+                                    "name": "web_search",
+                                    "arguments": '{"query":"latest AI"}',
+                                },
+                            }],
+                        },
+                    )
+                return LLMResponse(
+                    content="## Daily report\n\nUseful findings.",
+                    raw_message={
+                        "role": "assistant",
+                        "content": "## Daily report\n\nUseful findings.",
+                    },
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            store = ScheduleStore(workspace / ".scheduler" / "schedules.db")
+            schedule = store.create_agent_draft(
+                name="daily-agent",
+                task_prompt="Research AI news.",
+                hour=8,
+                plan={},
+                approval_status="active",
+                requested_tools=["web_search"],
+                approved_capabilities=[{
+                    "tool": "web_search",
+                    "risk": "low",
+                    "scope": {},
+                }],
+                limits={},
+            )
+            registry = ToolRegistry()
+            _register_tool(
+                registry,
+                "web_search",
+                handler=lambda **kwargs: '[{"url":"https://example.com"}]',
+                enabled_modes={"coding"},
+            )
+            sessions = SessionManager(workspace / ".sessions" / "sessions.db")
+            result = self._runner(
+                workspace=workspace,
+                store=store,
+                sessions=sessions,
+                provider=Provider(),
+                registry=registry,
+            ).run(schedule["id"])
+
+            self.assertEqual("success", result["status"])
+            self.assertTrue(result["task_session_id"].startswith("task:scheduled_agent-"))
+            self.assertTrue((workspace / result["report_path"]).is_file())
+            trace = json.loads((workspace / result["trace_path"]).read_text())
+            self.assertEqual("success", trace[0]["status"])
+            sessions.close()
+
+    def test_runner_pauses_when_model_attempts_unapproved_tool(self) -> None:
+        class Provider:
+            def chat(self, **kwargs):
+                return LLMResponse(
+                    content=None,
+                    tool_calls=[ToolCall(
+                        id="call-1",
+                        name="bash",
+                        arguments={"command": "python scripts/report.py"},
+                    )],
+                    raw_message={
+                        "role": "assistant",
+                        "tool_calls": [{
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {
+                                "name": "bash",
+                                "arguments": '{"command":"python scripts/report.py"}',
+                            },
+                        }],
+                    },
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            store = ScheduleStore(workspace / ".scheduler" / "schedules.db")
+            schedule = store.create_agent_draft(
+                name="daily-agent",
+                task_prompt="Research AI news.",
+                hour=8,
+                plan={},
+                approval_status="active",
+                requested_tools=["web_search"],
+                approved_capabilities=[{
+                    "tool": "web_search",
+                    "risk": "low",
+                    "scope": {},
+                }],
+                limits={},
+            )
+            registry = ToolRegistry()
+            _register_tool(registry, "bash", risk="high", enabled_modes={"coding"})
+            sessions = SessionManager(workspace / ".sessions" / "sessions.db")
+            result = self._runner(
+                workspace=workspace,
+                store=store,
+                sessions=sessions,
+                provider=Provider(),
+                registry=registry,
+            ).run(schedule["id"])
+
+            self.assertEqual("awaiting_runtime_approval", result["status"])
+            self.assertEqual("bash", result["approval_request"]["tool"])
+            self.assertEqual(
+                "awaiting_runtime_approval",
+                store.list_runs(schedule_id=schedule["id"])[0]["status"],
+            )
+            self.assertEqual(
+                "bash",
+                store.list_runtime_approval_runs()[0]["approval_request"]["tool"],
+            )
+            sessions.close()
 
 
 class ScheduledReportServiceTests(unittest.TestCase):
@@ -348,6 +652,11 @@ class SchedulerPluginTests(unittest.TestCase):
             self.assertEqual({
                 "schedule_create",
                 "schedule_create_workflow",
+                "schedule_create_agent_draft",
+                "schedule_approve_agent",
+                "schedule_approve_runtime",
+                "schedule_reject_agent",
+                "schedule_pending_approvals",
                 "schedule_list",
                 "schedule_delete",
                 "schedule_run_now",
@@ -372,6 +681,101 @@ class SchedulerPluginTests(unittest.TestCase):
             ))
 
             self.assertEqual("llm_analyze", created["workflow"][1]["type"])
+
+    def test_plugin_creates_and_approves_agent_draft(self) -> None:
+        class Planner:
+            def create_draft(self, *, task_prompt, auditor):
+                plan = ScheduledTaskPlan(
+                    task_prompt=task_prompt,
+                    summary="Daily AI report",
+                    requested_tools=["web_search", "read_file"],
+                    limits={"max_reasoning_steps": 12, "max_tool_calls": 8, "timeout_seconds": 300},
+                )
+                return ScheduledTaskDraft(
+                    plan=plan,
+                    audit=auditor.audit(plan.requested_tools),
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = ToolRegistry()
+            _register_tool(registry, "web_search", risk="low")
+            _register_tool(registry, "read_file", risk="normal")
+            plugin = SchedulerPlugin()
+            plugin.setup(SimpleNamespace(
+                workspace=Path(tmp),
+                tool_registry=registry,
+            ))
+            plugin.planner = Planner()
+
+            draft = json.loads(plugin.schedule_create_agent_draft(
+                name="daily-agent",
+                task_prompt="Generate a daily AI report.",
+                hour=8,
+            ))
+            approved = json.loads(plugin.schedule_approve_agent(
+                schedule_id=draft["schedule"]["id"],
+                capabilities=[{
+                    "tool": "read_file",
+                    "scope": {"paths": ["docs"]},
+                }],
+            ))
+
+            self.assertEqual("awaiting_approval", draft["audit"]["approval_status"])
+            self.assertEqual("active", approved["approval_status"])
+            self.assertEqual({
+                "schedule_drafts": [],
+                "runtime_requests": [],
+            }, json.loads(plugin.schedule_pending_approvals()))
+
+    def test_plugin_approves_runtime_request_for_future_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            registry = ToolRegistry()
+            _register_tool(registry, "web_search", risk="low")
+            _register_tool(registry, "bash", risk="high")
+            plugin = SchedulerPlugin()
+            plugin.setup(SimpleNamespace(
+                workspace=Path(tmp),
+                tool_registry=registry,
+            ))
+            schedule = plugin.store.create_agent_draft(
+                name="daily-agent",
+                task_prompt="Generate a daily AI report.",
+                hour=8,
+                plan={},
+                approval_status="active",
+                requested_tools=["web_search"],
+                approved_capabilities=[{
+                    "tool": "web_search",
+                    "risk": "low",
+                    "scope": {},
+                }],
+                limits={},
+            )
+            run_id = plugin.store.begin_run(schedule)
+            plugin.store.complete_run(
+                run_id=run_id,
+                schedule_id=schedule["id"],
+                status="awaiting_runtime_approval",
+                approval_request={
+                    "tool": "bash",
+                    "arguments": {"command": "python scripts/report.py"},
+                },
+            )
+
+            result = json.loads(plugin.schedule_approve_runtime(
+                schedule_id=schedule["id"],
+                run_id=run_id,
+                capability={
+                    "tool": "bash",
+                    "scope": {"commands": ["python scripts/report.py"]},
+                },
+            ))
+
+            self.assertTrue(result["rerun_required"])
+            self.assertEqual(["bash", "web_search"], [
+                item["tool"]
+                for item in result["schedule"]["approved_capabilities"]
+            ])
 
 
 class SchedulerWorkerTests(unittest.TestCase):
@@ -419,6 +823,106 @@ class SchedulerWorkerTests(unittest.TestCase):
         store.schedules = []
         worker.reconcile()
         self.assertEqual({}, scheduler.jobs)
+
+    def test_worker_routes_agent_schedule_and_skips_unapproved_jobs(self) -> None:
+        class Store:
+            schedules = [
+                {
+                    "id": 1,
+                    "name": "workflow",
+                    "hour": 8,
+                    "minute": 0,
+                    "timezone": "Asia/Shanghai",
+                    "schedule_type": "workflow",
+                    "approval_status": "active",
+                },
+                {
+                    "id": 2,
+                    "name": "approved-agent",
+                    "hour": 9,
+                    "minute": 0,
+                    "timezone": "Asia/Shanghai",
+                    "schedule_type": "agent",
+                    "approval_status": "active",
+                },
+                {
+                    "id": 3,
+                    "name": "pending-agent",
+                    "hour": 10,
+                    "minute": 0,
+                    "timezone": "Asia/Shanghai",
+                    "schedule_type": "agent",
+                    "approval_status": "awaiting_approval",
+                },
+            ]
+
+            def list_schedules(self, *, enabled_only=False):
+                return list(self.schedules)
+
+            def get(self, schedule_id):
+                return next(item for item in self.schedules if item["id"] == schedule_id)
+
+        class FakeScheduler:
+            def __init__(self):
+                self.jobs = {}
+
+            def add_job(self, func, *, id, **kwargs):
+                self.jobs[id] = {"func": func, **kwargs}
+
+            def get_job(self, job_id):
+                return self.jobs.get(job_id)
+
+            def remove_job(self, job_id):
+                self.jobs.pop(job_id)
+
+        class Runner:
+            def __init__(self):
+                self.calls = []
+
+            def run(self, schedule_id):
+                self.calls.append(schedule_id)
+                return {"status": "success"}
+
+        store = Store()
+        scheduler = FakeScheduler()
+        reports = Runner()
+        agent_runner = Runner()
+        worker = SchedulerWorker(
+            store=store,
+            reports=reports,
+            agent_runner=agent_runner,
+            scheduler=scheduler,
+            cron_trigger=lambda **kwargs: kwargs,
+        )
+
+        worker.reconcile()
+        worker.run_schedule(1)
+        worker.run_schedule(2)
+
+        self.assertEqual(
+            {"scheduled-search:1", "scheduled-search:2"},
+            set(scheduler.jobs),
+        )
+        self.assertEqual([1], reports.calls)
+        self.assertEqual([2], agent_runner.calls)
+
+
+class WebSearchVisibilityTests(unittest.TestCase):
+    def test_web_search_is_visible_in_bot_mode_without_unlock(self) -> None:
+        registry = ToolRegistry()
+        plugin = WebSearchPlugin()
+        for registration in plugin.tools():
+            registry.register(
+                registration.schema,
+                registration.handler,
+                risk=registration.risk,
+                enabled_modes=registration.enabled_modes,
+                always_on=registration.always_on,
+                source=registration.source,
+            )
+        session = SimpleNamespace(metadata={})
+
+        self.assertIn("web_search", registry.visible_names_for_turn(session, "bot"))
 
 
 if __name__ == "__main__":

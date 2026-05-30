@@ -15,6 +15,7 @@ class ToolExecutionRequest:
     arguments: dict[str, Any]
     session_id: str = ""
     source: str = "passive"
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -136,5 +137,4 @@ class ToolExecutor:
                     decision="error",
                     reason=str(e),
                 ))
-
 

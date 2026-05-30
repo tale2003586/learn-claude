@@ -13,6 +13,9 @@ class RouteResult:
 
 
 class ModeRouter:
+    def __init__(self, *, hybrid_classifier=None) -> None:
+        self.hybrid_classifier = hybrid_classifier
+
     def route(self, session, user_text: str) -> RouteResult:
         text = user_text.strip().lower()
 
@@ -48,7 +51,11 @@ class ModeRouter:
 
         # hybrid: 每轮判断
         if self._looks_like_coding_request(text):
-            return RouteResult(profile=CODING_PROFILE)
+            if (
+                self.hybrid_classifier is not None
+                and self.hybrid_classifier.should_use_coding(user_text)
+            ):
+                return RouteResult(profile=CODING_PROFILE)
 
         return RouteResult(profile=BOT_PROFILE)
 

@@ -3,6 +3,7 @@ from core.compact import auto_compact, estimate_tokens, micro_compact
 from config import THRESHOLD
 from bus.team_bus import BUS
 from tools.executor import ToolExecutionRequest
+import time
 from typing import Callable
 
 
@@ -45,8 +46,11 @@ class Pipeline:
         on_text: Callable[[str], None] | None = None,
     ) -> None:
         self._before_turn(session)
+        reasoning_steps = 0
 
         while True:
+            reasoning_steps += 1
+            self._check_automation_budget(session, reasoning_steps)
             turn_context = self._before_reasoning(session, profile)
 
             response = self._reasoning_step(
@@ -63,6 +67,9 @@ class Pipeline:
                 return
 
             manual_compact = self._execute_tool_calls(session, response, profile)
+            if self._automation_should_pause(session):
+                self._after_turn(session)
+                return
 
             if manual_compact:
                 session.messages[:] = auto_compact(session.messages)
@@ -145,6 +152,8 @@ class Pipeline:
                     tool_name=call.name,
                     arguments=call.arguments,
                     session_id=session.id,
+                    source=str((session.metadata or {}).get("kind", "passive")),
+                    metadata=session.metadata,
                 )
                 result = self.tool_executor.execute(
                     request,
@@ -171,6 +180,26 @@ class Pipeline:
                     ],
                 })
         return manual_compact
+
+    def _check_automation_budget(self, session, reasoning_steps: int) -> None:
+        metadata = session.metadata or {}
+        if metadata.get("kind") != "scheduled_agent":
+            return
+        limits = metadata.get("automation_limits", {})
+        max_steps = max(1, int(limits.get("max_reasoning_steps", 12)))
+        if reasoning_steps > max_steps:
+            raise RuntimeError("Scheduled agent reasoning-step budget exceeded.")
+        started_at = float(metadata.get("automation_started_monotonic", time.monotonic()))
+        timeout_seconds = max(1, int(limits.get("timeout_seconds", 300)))
+        if time.monotonic() - started_at > timeout_seconds:
+            raise RuntimeError("Scheduled agent timeout exceeded.")
+
+    def _automation_should_pause(self, session) -> bool:
+        metadata = session.metadata or {}
+        return (
+            metadata.get("kind") == "scheduled_agent"
+            and bool(metadata.get("runtime_approval_request"))
+        )
 
     def _after_turn(self, session) -> None:
         if self.memory_lifecycle is not None:

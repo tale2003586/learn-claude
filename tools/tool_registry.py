@@ -89,6 +89,25 @@ class ToolRegistry:
     def unregister(self, name: str) -> None:
         self._tools.pop(name, None)
 
+    def catalog(self, *, mode: str | None = None) -> list[dict[str, Any]]:
+        items = []
+        for tool in self._tools.values():
+            if mode is not None and not tool.enabled_for(mode):
+                continue
+            items.append({
+                "name": tool.name,
+                "description": tool.schema["function"].get("description", ""),
+                "risk": tool.risk,
+                "source": tool.source,
+                "enabled_modes": (
+                    sorted(tool.enabled_modes)
+                    if tool.enabled_modes is not None
+                    else None
+                ),
+                "always_on": tool.always_on,
+            })
+        return sorted(items, key=lambda item: item["name"])
+
     def schemas_for_mode(self, mode: str = "coding") -> list[dict]:
         return [
             tool.schema
@@ -110,7 +129,15 @@ class ToolRegistry:
             for name, tool in self._tools.items()
             if tool.enabled_for(mode)
         }
-        unlocked = set((session.metadata or {}).get(UNLOCKED_TOOLS_KEY, []))
+        metadata = session.metadata or {}
+        if metadata.get("kind") == "scheduled_agent":
+            approved = {
+                capability.get("tool")
+                for capability in metadata.get("approved_capabilities", [])
+                if isinstance(capability, dict)
+            }
+            return approved & allowed
+        unlocked = set(metadata.get(UNLOCKED_TOOLS_KEY, []))
         visible = (
             ALWAYS_ON_TOOLS
             | {name for name, tool in self._tools.items() if tool.always_on}

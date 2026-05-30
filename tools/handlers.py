@@ -196,7 +196,7 @@ TASK_MEMORY_ROOT = (WORKDIR / ".task_sessions").resolve()
 
 def memory_store_for_session(session=None) -> MemoryStore:
     metadata = getattr(session, "metadata", {}) or {}
-    if metadata.get("kind") != "task_session":
+    if metadata.get("kind") not in {"task_session", "scheduled_agent"}:
         return MEMORY
 
     task_id = str(metadata.get("task_id", "")).strip()

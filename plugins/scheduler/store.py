@@ -68,7 +68,8 @@ class ScheduleStore:
                     approval_status  TEXT NOT NULL DEFAULT 'active',
                     requested_tools_json       TEXT NOT NULL DEFAULT '[]',
                     approved_capabilities_json TEXT NOT NULL DEFAULT '[]',
-                    limits_json                TEXT NOT NULL DEFAULT '{}'
+                    limits_json                TEXT NOT NULL DEFAULT '{}',
+                    plan_json                  TEXT NOT NULL DEFAULT '{}'
                 )
                 """
             )
@@ -119,6 +120,12 @@ class ScheduleStore:
                 conn,
                 "schedules",
                 "limits_json",
+                "TEXT NOT NULL DEFAULT '{}'",
+            )
+            self._ensure_column(
+                conn,
+                "schedules",
+                "plan_json",
                 "TEXT NOT NULL DEFAULT '{}'",
             )
             self._ensure_column(conn, "schedule_runs", "task_session_id", "TEXT")
@@ -220,6 +227,175 @@ class ScheduleStore:
             conn.commit()
             schedule_id = cursor.lastrowid
         return self.get(schedule_id)
+
+    def create_agent_draft(
+        self,
+        *,
+        name: str,
+        task_prompt: str,
+        hour: int,
+        minute: int = 0,
+        timezone_name: str = "Asia/Shanghai",
+        plan: dict[str, Any],
+        approval_status: str,
+        requested_tools: list[str],
+        approved_capabilities: list[dict[str, Any]],
+        limits: dict[str, Any],
+    ) -> dict[str, Any]:
+        task_prompt = str(task_prompt).strip()
+        if not task_prompt:
+            raise ValueError("task_prompt is required.")
+        if approval_status not in {"active", "awaiting_approval", "blocked"}:
+            raise ValueError(f"Invalid initial approval status: {approval_status}")
+        values = self._validated_values(
+            name=name,
+            query=task_prompt,
+            hour=hour,
+            minute=minute,
+            timezone_name=timezone_name,
+            topic="general",
+            max_results=1,
+            time_range=None,
+        )
+        now = _now_iso()
+        with self._lock, closing(self._connect()) as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO schedules (
+                    name,
+                    query,
+                    topic,
+                    max_results,
+                    time_range,
+                    hour,
+                    minute,
+                    timezone,
+                    enabled,
+                    created_at,
+                    updated_at,
+                    schedule_type,
+                    task_prompt,
+                    approval_status,
+                    requested_tools_json,
+                    approved_capabilities_json,
+                    limits_json,
+                    plan_json
+                ) VALUES (?, ?, 'general', 1, NULL, ?, ?, ?, 1, ?, ?, 'agent', ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    values["name"],
+                    values["query"],
+                    values["hour"],
+                    values["minute"],
+                    values["timezone"],
+                    now,
+                    now,
+                    task_prompt,
+                    approval_status,
+                    json.dumps(requested_tools, ensure_ascii=False),
+                    json.dumps(approved_capabilities, ensure_ascii=False),
+                    json.dumps(limits, ensure_ascii=False),
+                    json.dumps(plan, ensure_ascii=False),
+                ),
+            )
+            conn.commit()
+            schedule_id = cursor.lastrowid
+        return self.get(schedule_id)
+
+    def update_agent_approval(
+        self,
+        schedule_id: int,
+        *,
+        approved_capabilities: list[dict[str, Any]],
+        approval_status: str,
+        requested_tools: list[str] | None = None,
+    ) -> dict[str, Any]:
+        if approval_status not in {"active", "awaiting_approval"}:
+            raise ValueError(f"Invalid approval status: {approval_status}")
+        schedule = self.get(schedule_id)
+        if schedule["schedule_type"] != "agent":
+            raise ValueError("Only agent schedules can be approved.")
+        if schedule["approval_status"] in {"blocked", "rejected"}:
+            raise ValueError(f"Schedule cannot be approved: {schedule['approval_status']}")
+        with self._lock, closing(self._connect()) as conn:
+            conn.execute(
+                """
+                UPDATE schedules
+                SET
+                    approved_capabilities_json = ?,
+                    approval_status = ?,
+                    requested_tools_json = COALESCE(?, requested_tools_json),
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    json.dumps(approved_capabilities, ensure_ascii=False),
+                    approval_status,
+                    (
+                        json.dumps(requested_tools, ensure_ascii=False)
+                        if requested_tools is not None
+                        else None
+                    ),
+                    _now_iso(),
+                    int(schedule_id),
+                ),
+            )
+            conn.commit()
+        return self.get(schedule_id)
+
+    def get_run(self, run_id: int) -> dict[str, Any]:
+        with self._lock, closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT * FROM schedule_runs WHERE id = ?",
+                (int(run_id),),
+            ).fetchone()
+        if row is None:
+            raise ValueError(f"Schedule run not found: {run_id}")
+        return self._run_row(row)
+
+    def reject_agent(self, schedule_id: int) -> dict[str, Any]:
+        schedule = self.get(schedule_id)
+        if schedule["schedule_type"] != "agent":
+            raise ValueError("Only agent schedules can be rejected.")
+        with self._lock, closing(self._connect()) as conn:
+            conn.execute(
+                """
+                UPDATE schedules
+                SET approval_status = 'rejected', enabled = 0, updated_at = ?
+                WHERE id = ?
+                """,
+                (_now_iso(), int(schedule_id)),
+            )
+            conn.commit()
+        return self.get(schedule_id)
+
+    def list_pending_agents(self) -> list[dict[str, Any]]:
+        with self._lock, closing(self._connect()) as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM schedules
+                WHERE schedule_type = 'agent'
+                  AND approval_status IN ('awaiting_approval', 'blocked')
+                ORDER BY id ASC
+                """
+            ).fetchall()
+        return [self._schedule_row(row) for row in rows]
+
+    def list_runtime_approval_runs(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        with self._lock, closing(self._connect()) as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM schedule_runs
+                WHERE status = 'awaiting_runtime_approval'
+                  AND approval_request_json IS NOT NULL
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (max(1, min(int(limit), 100)),),
+            ).fetchall()
+        return [self._run_row(row) for row in rows]
 
     def list_schedules(self, *, enabled_only: bool = False) -> list[dict[str, Any]]:
         sql = "SELECT * FROM schedules"
@@ -407,7 +583,10 @@ class ScheduleStore:
         data = dict(row)
         data["enabled"] = bool(data["enabled"])
         raw_workflow = data.pop("workflow_json", None)
-        if raw_workflow:
+        schedule_type = data.get("schedule_type") or "workflow"
+        if schedule_type == "agent":
+            data["workflow"] = []
+        elif raw_workflow:
             data["workflow"] = validate_workflow(json.loads(raw_workflow))
         else:
             data["workflow"] = build_search_workflow(
@@ -416,7 +595,7 @@ class ScheduleStore:
                 max_results=data["max_results"],
                 time_range=data["time_range"],
             )
-        data["schedule_type"] = data.get("schedule_type") or "workflow"
+        data["schedule_type"] = schedule_type
         data["approval_status"] = data.get("approval_status") or "active"
         data["requested_tools"] = _json_value(
             data.pop("requested_tools_json", None),
@@ -430,6 +609,11 @@ class ScheduleStore:
         )
         data["limits"] = _json_value(
             data.pop("limits_json", None),
+            fallback={},
+            expected_type=dict,
+        )
+        data["plan"] = _json_value(
+            data.pop("plan_json", None),
             fallback={},
             expected_type=dict,
         )

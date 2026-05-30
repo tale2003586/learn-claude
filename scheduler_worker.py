@@ -12,11 +12,15 @@ class SchedulerWorker:
         *,
         store=None,
         reports=None,
+        agent_runner=None,
+        agent_runner_factory=None,
         scheduler=None,
         cron_trigger=None,
     ) -> None:
         self.store = store or ScheduleStore()
         self.reports = reports or ScheduledReportService(store=self.store)
+        self.agent_runner = agent_runner
+        self.agent_runner_factory = agent_runner_factory or _build_agent_runner
         if scheduler is None or cron_trigger is None:
             try:
                 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -34,7 +38,14 @@ class SchedulerWorker:
         self._signatures: dict[int, tuple] = {}
 
     def reconcile(self) -> None:
-        schedules = self.store.list_schedules(enabled_only=True)
+        schedules = [
+            schedule
+            for schedule in self.store.list_schedules(enabled_only=True)
+            if (
+                schedule.get("schedule_type", "workflow") != "agent"
+                or schedule.get("approval_status") == "active"
+            )
+        ]
         active_ids = {schedule["id"] for schedule in schedules}
 
         for schedule_id in set(self._signatures) - active_ids:
@@ -72,7 +83,13 @@ class SchedulerWorker:
             )
 
     def run_schedule(self, schedule_id: int) -> None:
-        result = self.reports.run(schedule_id)
+        schedule = self.store.get(schedule_id)
+        if schedule.get("schedule_type", "workflow") == "agent":
+            if self.agent_runner is None:
+                self.agent_runner = self.agent_runner_factory()
+            result = self.agent_runner.run(schedule_id)
+        else:
+            result = self.reports.run(schedule_id)
         print(f"Schedule #{schedule_id}: {result}")
 
     def run_forever(self) -> None:
@@ -101,6 +118,17 @@ class SchedulerWorker:
 
     def _job_id(self, schedule_id: int) -> str:
         return f"scheduled-search:{schedule_id}"
+
+
+def _build_agent_runner():
+    from core.bootstrap import build_runtime
+    from plugins.scheduler.plugin import SchedulerPlugin
+
+    runtime = build_runtime()
+    for plugin in runtime.loop.plugin_manager.plugins:
+        if isinstance(plugin, SchedulerPlugin) and plugin.agent_runner is not None:
+            return plugin.agent_runner
+    raise RuntimeError("Scheduled agent runner could not be initialized.")
 
 
 def main() -> None:

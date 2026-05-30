@@ -9,6 +9,7 @@ from tools.hooks import FileWriteScopeHook, ToolLoopGuardHook, ToolTraceHook
 from tools.executor import ToolExecutor
 from tools.tool_registry import build_lead_tool_registry
 from modes.router import ModeRouter
+from modes.hybrid_classifier import HybridModeClassifier
 from sessions import SessionManager
 from tasksessions import TaskSessionRunner
 from memory.archive_store import MemoryArchiveStore
@@ -20,15 +21,21 @@ from plugins.shell_safety import ShellSafetyPlugin
 from plugins.status_commands import StatusCommandsPlugin
 from plugins.web_search import WebSearchPlugin
 from plugins.scheduler import SchedulerPlugin
+from plugins.scheduler.agent_runner import ScheduledAgentRunner
 
 
 def build_runtime() -> AppRuntime:
     bus = MessageBus()
     sessions = SessionManager()
-    router = ModeRouter()
     tools = build_lead_tool_registry()
 
     provider = OpenAICompatibleProvider(client)
+    router = ModeRouter(
+        hybrid_classifier=HybridModeClassifier(
+            provider=provider,
+            model=MODEL,
+        ),
+    )
 
     memory_store = MemoryStore()
     memory_archive_store = MemoryArchiveStore()
@@ -39,12 +46,13 @@ def build_runtime() -> AppRuntime:
         archive_store=memory_archive_store,
     )
 
+    scheduler_plugin = SchedulerPlugin()
     plugin_manager = PluginManager(
         [
             ShellSafetyPlugin(),
             StatusCommandsPlugin(),
             WebSearchPlugin(),
-            SchedulerPlugin(),
+            scheduler_plugin,
         ],
         workspace=WORKDIR,
         tool_registry=tools,
@@ -74,6 +82,13 @@ def build_runtime() -> AppRuntime:
         base_pipeline=pipeline,
         global_memory=memory_store,
     )
+    scheduler_plugin.bind_agent_runner(ScheduledAgentRunner(
+        store=scheduler_plugin.store,
+        sessions=sessions,
+        base_pipeline=pipeline,
+        global_memory=memory_store,
+        workspace=WORKDIR,
+    ))
 
     loop = AgentLoop(
         bus,

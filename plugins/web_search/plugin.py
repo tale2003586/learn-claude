@@ -39,7 +39,7 @@ class WebSearchPlugin(Plugin):
                 handler=self.search,
                 risk="low",
                 enabled_modes={"bot", "coding"},
-                always_on=False,
+                always_on=True,
                 source="plugin:web_search",
             )
         ]

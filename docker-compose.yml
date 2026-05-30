@@ -42,4 +42,7 @@ services:
     command: ["python", "scheduler_worker.py"]
     volumes:
       - ./storage:/app/storage
+      - ./memory:/app/memory
+      - ./.sessions:/app/.sessions
+      - ./.task_sessions:/app/.task_sessions
       - ./.scheduler:/app/.scheduler

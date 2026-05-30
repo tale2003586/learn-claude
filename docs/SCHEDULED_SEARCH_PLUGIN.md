@@ -280,11 +280,13 @@ git diff --check
 
 ## 十一、受审批定时 Agent 的数据库基础
 
-在现有受控 Workflow 之外，项目已经开始为受审批的自主定时 Agent 预留存储结构。
-当前只完成数据库字段、兼容迁移和运行元数据接口，尚未启用自主执行。
+在现有受控 Workflow 之外，项目已经支持受审批的自主定时 Agent。
+自主任务会先规划并审计工具，再由隔离 TaskSession 执行批准范围内的能力。
 
 详细记录：
 
 ```text
 docs/SCHEDULED_AGENT_STORAGE_FOUNDATION.md
+docs/SCHEDULED_AGENT_PLANNING_AUDIT.md
+docs/SCHEDULED_AGENT_AUTONOMOUS_EXECUTION.md
 ```

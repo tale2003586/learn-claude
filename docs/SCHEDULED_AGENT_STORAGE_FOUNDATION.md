@@ -2,7 +2,12 @@
 
 ## 一、当前阶段
 
-本次只完成受审批定时 Agent 的第 1 阶段：扩展 SQLite 存储结构和兼容迁移。
+本文记录受审批定时 Agent 的第 1 阶段：扩展 SQLite 存储结构和兼容迁移。
+后续自主执行链路已经完成，见：
+
+```text
+docs/SCHEDULED_AGENT_AUTONOMOUS_EXECUTION.md
+```
 
 现有定时搜索与受控 Workflow 的运行逻辑保持不变：
 
@@ -14,8 +19,8 @@ APScheduler
   -> write_report
 ```
 
-本次尚未启用自主 Agent 执行，也不会让 worker 调用 `AgentLoop`、`TaskSessionRunner`
-或高风险工具。新增字段用于后续实现工具审计、人工审批、隔离 TaskSession 和运行轨迹。
+第 1 阶段尚未启用自主 Agent 执行。新增字段用于后续实现工具审计、人工审批、
+隔离 TaskSession 和运行轨迹。
 
 ## 二、设计目标
 
@@ -45,6 +50,7 @@ approval_status = active
 | `requested_tools_json` | `TEXT NOT NULL` | `[]` | 保存 Planner 申请的工具列表 |
 | `approved_capabilities_json` | `TEXT NOT NULL` | `[]` | 保存用户批准的能力范围 |
 | `limits_json` | `TEXT NOT NULL` | `{}` | 保存 token、步骤数、工具调用次数和超时限制 |
+| `plan_json` | `TEXT NOT NULL` | `{}` | 保存 Planner 生成的结构化计划、摘要与理由 |
 
 后续建议使用以下审批状态：
 
@@ -111,6 +117,7 @@ ScheduleStore(...)
     "requested_tools": [],
     "approved_capabilities": [],
     "limits": {},
+    "plan": {},
 }
 ```
 
@@ -171,17 +178,35 @@ store.complete_run(
 TaskSession、轨迹路径和运行时审批请求可以写入并读回
 ```
 
-## 九、下一阶段
+## 九、后续阶段
 
-下一阶段可以在这套存储基础上实现：
+第 2 阶段已经完成：
 
 ```text
 ScheduledTaskPlanner
 ToolCapabilityAuditor
+```
+
+详细记录：
+
+```text
+docs/SCHEDULED_AGENT_PLANNING_AUDIT.md
+```
+
+第 3 阶段已经完成：
+
+```text
 schedule_create_agent_draft
 schedule_approve_agent
 schedule_reject_agent
 schedule_pending_approvals
+schedule_approve_runtime
+ScheduledAgentRunner
+ToolApprovalPolicyHook
 ```
 
-在审批层完成之前，不应让定时 Agent 获得 `bash`、文件编辑或后台命令能力。
+详细记录：
+
+```text
+docs/SCHEDULED_AGENT_AUTONOMOUS_EXECUTION.md
+```
