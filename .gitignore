@@ -3,6 +3,7 @@ __pycache__/
 
 .sessions/
 .task_sessions/
+.task_sandbox/
 .tasks/
 .team/
 .transcripts/

@@ -85,6 +85,135 @@ BASE_TOOLS = [
 ]
 
 
+STORAGE_TOOLS = [
+    function_tool(
+        "storage_list_files",
+        (
+            "List files in the private storage area. Paths are relative to storage/, "
+            "such as uploads or generated/reports."
+        ),
+        {
+            "path": {
+                "type": "string",
+                "description": "Optional directory path relative to storage/. Defaults to the storage root.",
+            },
+        },
+    ),
+    function_tool(
+        "storage_read_file",
+        (
+            "Read a UTF-8 text file from the private storage area. "
+            "The path must be relative to storage/."
+        ),
+        {
+            "path": {
+                "type": "string",
+                "description": "File path relative to storage/, such as uploads/notes.txt.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Optional maximum number of lines to return.",
+            },
+        },
+        ["path"],
+    ),
+    function_tool(
+        "storage_write_file",
+        (
+            "Create a new UTF-8 text artifact in storage/generated/. "
+            "Use this for reports, notes, and exports. Paths are relative to "
+            "storage/generated/, and existing files are never overwritten."
+        ),
+        {
+            "path": {
+                "type": "string",
+                "description": "New artifact path relative to storage/generated/, such as reports/ai-daily.md.",
+            },
+            "content": {
+                "type": "string",
+                "description": "UTF-8 text content to save.",
+            },
+        },
+        ["path", "content"],
+    ),
+]
+
+
+SANDBOX_TOOLS = [
+    function_tool(
+        "sandbox_list_files",
+        (
+            "List files in this conversation's private temporary sandbox. "
+            "Use the sandbox for drafts and intermediate files before publishing a final artifact."
+        ),
+        {
+            "path": {
+                "type": "string",
+                "description": "Optional directory path relative to this session's sandbox.",
+            },
+        },
+    ),
+    function_tool(
+        "sandbox_read_file",
+        "Read a UTF-8 text file from this conversation's private temporary sandbox.",
+        {
+            "path": {
+                "type": "string",
+                "description": "File path relative to this session's sandbox.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Optional maximum number of lines to return.",
+            },
+        },
+        ["path"],
+    ),
+    function_tool(
+        "sandbox_write_file",
+        (
+            "Write a UTF-8 draft or intermediate file in this conversation's private "
+            "temporary sandbox. Set overwrite=true only when intentionally revising a draft."
+        ),
+        {
+            "path": {
+                "type": "string",
+                "description": "File path relative to this session's sandbox.",
+            },
+            "content": {
+                "type": "string",
+                "description": "UTF-8 text content to save.",
+            },
+            "overwrite": {
+                "type": "boolean",
+                "description": "Whether to replace an existing sandbox file. Defaults to false.",
+            },
+        },
+        ["path", "content"],
+    ),
+    function_tool(
+        "publish_artifact",
+        (
+            "Publish one finished sandbox file to storage/generated/. "
+            "Existing generated files are never overwritten."
+        ),
+        {
+            "source_path": {
+                "type": "string",
+                "description": "Finished file path relative to this session's sandbox.",
+            },
+            "destination_path": {
+                "type": "string",
+                "description": (
+                    "Optional destination path relative to storage/generated/. "
+                    "Defaults to the source path."
+                ),
+            },
+        },
+        ["source_path"],
+    ),
+]
+
+
 SKILL_TOOLS = [
     function_tool(
         "load_skill",
@@ -446,7 +575,14 @@ TEAMMATE_TOOLS = (
     + TEAMMATE_PROTOCOL_TOOLS
 )
 
-LEAD_TOOLS = TEAMMATE_TOOLS + LEAD_ONLY_TOOLS + MEMORY_TOOLS + SEARCH_TOOLS
+LEAD_TOOLS = (
+    TEAMMATE_TOOLS
+    + LEAD_ONLY_TOOLS
+    + MEMORY_TOOLS
+    + STORAGE_TOOLS
+    + SANDBOX_TOOLS
+    + SEARCH_TOOLS
+)
 
 # Temporary compatibility aliases for older imports. Prefer TEAMMATE_TOOLS and
 # LEAD_TOOLS in new code.

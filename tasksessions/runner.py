@@ -1,5 +1,5 @@
 from core.context import ContextBuilder
-from core.pipeline import Pipeline, get_last_assistant_text
+from core.pipeline import DEFAULT_MAX_REASONING_STEPS, Pipeline, get_last_assistant_text
 from config import WORKDIR
 from memory.store import MemoryStore
 from sessions import SessionManager
@@ -91,6 +91,11 @@ class TaskSessionRunner:
             context_builder=ContextBuilder(memory_store=task_memory),
             memory_lifecycle=TaskMemoryLifecycle(task_memory),
             max_tokens=self.base_pipeline.max_tokens,
+            max_reasoning_steps=getattr(
+                self.base_pipeline,
+                "max_reasoning_steps",
+                DEFAULT_MAX_REASONING_STEPS,
+            ),
         )
 
     def _seed_task_memory(

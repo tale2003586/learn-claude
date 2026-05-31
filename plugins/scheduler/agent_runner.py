@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from core.context import ContextBuilder
-from core.pipeline import Pipeline, get_last_assistant_text
+from core.pipeline import DEFAULT_MAX_REASONING_STEPS, Pipeline, get_last_assistant_text
 from memory.store import MemoryStore
 from modes.automation import AUTOMATION_PROFILE
 from plugins.scheduler.policy import ToolApprovalPolicyHook
@@ -227,6 +227,11 @@ class ScheduledAgentRunner:
             context_builder=ContextBuilder(memory_store=task_memory),
             memory_lifecycle=TaskMemoryLifecycle(task_memory),
             max_tokens=self.base_pipeline.max_tokens,
+            max_reasoning_steps=getattr(
+                self.base_pipeline,
+                "max_reasoning_steps",
+                DEFAULT_MAX_REASONING_STEPS,
+            ),
         )
 
     def _extract_and_promote(

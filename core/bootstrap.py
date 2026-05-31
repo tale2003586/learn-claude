@@ -7,6 +7,7 @@ from core.provider import OpenAICompatibleProvider
 from core.runtime import AppRuntime
 from tools.hooks import FileWriteScopeHook, ToolLoopGuardHook, ToolTraceHook
 from tools.executor import ToolExecutor
+from tools.handlers import cleanup_expired_sandboxes
 from tools.tool_registry import build_lead_tool_registry
 from modes.router import ModeRouter
 from modes.hybrid_classifier import HybridModeClassifier
@@ -26,6 +27,7 @@ from plugins.scheduler.agent_runner import ScheduledAgentRunner
 
 
 def build_runtime() -> AppRuntime:
+    cleanup_expired_sandboxes()
     bus = MessageBus()
     sessions = SessionManager()
     tools = build_lead_tool_registry()

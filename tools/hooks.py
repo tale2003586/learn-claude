@@ -74,6 +74,9 @@ class ToolLoopGuardHook(ToolHook):
             )
         return HookOutcome()
 
+    def reset_turn(self, session_id: str) -> None:
+        self._recent.pop(session_id or "_global", None)
+
     def _fingerprint(self, request: ToolExecutionRequest) -> str:
         return json.dumps(
             {

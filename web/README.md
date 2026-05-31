@@ -14,6 +14,8 @@
 - 会话历史列表
 - `memory/*.md` 记忆文件浏览
 - `storage/` 私有文件区，支持上传、弹窗预览文本、下载、重命名、删除
+- Bot 模式可以读取 `storage/`，并将报告、笔记和导出文件新建到 `storage/generated/`
+- Bot 模式拥有按会话隔离的 `.task_sandbox/` 临时工作区，可以将选定的最终文件发布到 `storage/generated/`
 - 会话侧栏支持删除 Web 会话，删除当前会话后会自动切换或新建会话
 - 文本分析页，AI 回复会和原文一起追加保存到 `storage/records/analysis.txt`
 - `/hybrid`、`/chat`、`/coding` 模式切换
@@ -174,6 +176,7 @@ PIP_EXTRA_INDEX_URL=
 PIP_TRUSTED_HOST=
 PIP_DEFAULT_TIMEOUT=180
 PIP_RETRIES=10
+TASK_SANDBOX_TTL_HOURS=168
 ```
 
 说明：
@@ -232,6 +235,7 @@ curl -u agent:你的密码 http://127.0.0.1:8000/api/runtime-health
 ./memory          长期记忆 Markdown
 ./.sessions      SQLite 会话库
 ./.task_sessions 任务会话
+./.task_sandbox  会话隔离的临时文件，默认保留 168 小时
 ./.tasks         task 数据
 ./.team          team inbox
 ./.transcripts   transcript

@@ -20,6 +20,7 @@ services:
       - ./memory:/app/memory
       - ./.sessions:/app/.sessions
       - ./.task_sessions:/app/.task_sessions
+      - ./.task_sandbox:/app/.task_sandbox
       - ./.tasks:/app/.tasks
       - ./.team:/app/.team
       - ./.transcripts:/app/.transcripts
@@ -45,4 +46,5 @@ services:
       - ./memory:/app/memory
       - ./.sessions:/app/.sessions
       - ./.task_sessions:/app/.task_sessions
+      - ./.task_sandbox:/app/.task_sandbox
       - ./.scheduler:/app/.scheduler

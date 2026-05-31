@@ -10,6 +10,13 @@ ALWAYS_ON_TOOLS = {
 PRELOADED_TOOLS_BY_MODE = {
     "bot": {
         "load_skill",
+        "storage_list_files",
+        "storage_read_file",
+        "storage_write_file",
+        "sandbox_list_files",
+        "sandbox_read_file",
+        "sandbox_write_file",
+        "publish_artifact",
     },
     "coding": {
         "read_file",
@@ -44,6 +51,11 @@ UNLOCKED_TOOLS_KEY = "unlocked_tools"
 SESSION_SCOPED_TOOLS = {
     "memorize",
     "recall_memory",
+    "storage_write_file",
+    "sandbox_list_files",
+    "sandbox_read_file",
+    "sandbox_write_file",
+    "publish_artifact",
 }
 
 
@@ -160,15 +172,15 @@ class ToolRegistry:
         if name == "tool_search":
             return self._tool_search(args.get("query", ""), session=session, mode=mode)
 
-        tool = self._tools.get(name)
-        if tool is None:
-            return f"Unknown tool: {name}"
-        if session is not None and name not in self.visible_names_for_turn(session, mode):
-            return (
-                f"Tool '{name}' is not visible in this turn. "
-                f"Call tool_search with query='select:{name}' first."
-            )
+        availability_error = self.execution_error_for_turn(
+            name,
+            session=session,
+            mode=mode,
+        )
+        if availability_error:
+            return availability_error
 
+        tool = self._tools[name]
         try:
             handler_args = dict(args)
             if name in SESSION_SCOPED_TOOLS:
@@ -176,6 +188,27 @@ class ToolRegistry:
             return tool.handler(**handler_args)
         except Exception as e:
             return f"Error: {e}"
+
+    def execution_error_for_turn(
+        self,
+        name: str,
+        *,
+        session=None,
+        mode: str = "coding",
+    ) -> str | None:
+        if name == "tool_search":
+            return None
+        tool = self._tools.get(name)
+        if tool is None:
+            return f"Unknown tool: {name}"
+        if not tool.enabled_for(mode):
+            return f"Tool '{name}' is not allowed in {mode} mode."
+        if session is not None and name not in self.visible_names_for_turn(session, mode):
+            return (
+                f"Tool '{name}' is not visible in this turn. "
+                f"Call tool_search with query='select:{name}' first."
+            )
+        return None
 
     def _tool_search(self, query: str, *, session=None, mode: str = "coding") -> str:
         query = (query or "").strip()
@@ -253,7 +286,16 @@ def build_lead_tool_registry() -> ToolRegistry:
 def _risk_for_tool(name: str) -> str:
     if name in {"bash", "write_file", "edit_file", "background_run"}:
         return "high"
-    if name in {"read_file", "task_list", "task_get", "check_background"}:
+    if name in {
+        "read_file",
+        "storage_list_files",
+        "storage_read_file",
+        "sandbox_list_files",
+        "sandbox_read_file",
+        "task_list",
+        "task_get",
+        "check_background",
+    }:
         return "low"
     if name == "tool_search":
         return "low"
@@ -287,6 +329,13 @@ def _modes_for_tool(name: str) -> set[str]:
 
     bot_tools = {
         "load_skill",
+        "storage_list_files",
+        "storage_read_file",
+        "storage_write_file",
+        "sandbox_list_files",
+        "sandbox_read_file",
+        "sandbox_write_file",
+        "publish_artifact",
     }
 
     enabled = set()
@@ -294,6 +343,16 @@ def _modes_for_tool(name: str) -> set[str]:
         enabled.add("coding")
     if name in bot_tools:
         enabled.add("bot")
+    if name in {
+        "storage_list_files",
+        "storage_read_file",
+        "storage_write_file",
+        "sandbox_list_files",
+        "sandbox_read_file",
+        "sandbox_write_file",
+        "publish_artifact",
+    }:
+        enabled.add("coding")
     if name in {"memorize", "recall_memory", "tool_search"}:
         enabled.update({"bot", "coding"})
     return enabled

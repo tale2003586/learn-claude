@@ -53,6 +53,10 @@ class ToolHook:
     def after(self, request: ToolExecutionRequest, result: ToolExecutionResult) -> None:
         return None
 
+    def reset_turn(self, session_id: str) -> None:
+        return None
+
+
 class ToolExecutor:
     def __init__(self, hooks: list[ToolHook] | None = None) -> None:
         self.hooks = hooks or []
@@ -114,6 +118,10 @@ class ToolExecutor:
         self._run_after_hooks(request, result)
         return result
 
+    def reset_turn(self, session_id: str) -> None:
+        for hook in self.hooks:
+            hook.reset_turn(session_id)
+
     def _run_after_hooks(self, request: ToolExecutionRequest, result: ToolExecutionResult) -> None:
         for hook in self.hooks:
             matched = hook.matches(request)
@@ -137,4 +145,3 @@ class ToolExecutor:
                     decision="error",
                     reason=str(e),
                 ))
-

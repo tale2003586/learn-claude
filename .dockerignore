@@ -5,6 +5,7 @@ __pycache__
 .env
 .sessions
 .task_sessions
+.task_sandbox
 .tasks
 .team
 .transcripts
