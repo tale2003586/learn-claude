@@ -20,6 +20,7 @@ from plugins import PluginManager
 from plugins.shell_safety import ShellSafetyPlugin
 from plugins.status_commands import StatusCommandsPlugin
 from plugins.web_search import WebSearchPlugin
+from plugins.markdown_pdf import MarkdownPdfPlugin
 from plugins.scheduler import SchedulerPlugin
 from plugins.scheduler.agent_runner import ScheduledAgentRunner
 
@@ -52,6 +53,7 @@ def build_runtime() -> AppRuntime:
             ShellSafetyPlugin(),
             StatusCommandsPlugin(),
             WebSearchPlugin(),
+            MarkdownPdfPlugin(),
             scheduler_plugin,
         ],
         workspace=WORKDIR,

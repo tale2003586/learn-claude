@@ -56,6 +56,8 @@ const els = {
   fileUploadInput: document.querySelector("#fileUploadInput"),
   fileBreadcrumb: document.querySelector("#fileBreadcrumb"),
   fileList: document.querySelector("#fileList"),
+  filePreviewModal: document.querySelector("#filePreviewModal"),
+  filePreviewClose: document.querySelector("#filePreviewClose"),
   filePreview: document.querySelector("#filePreview"),
   analysisRecordPath: document.querySelector("#analysisRecordPath"),
   analysisDownloadLink: document.querySelector("#analysisDownloadLink"),
@@ -133,6 +135,9 @@ function setBusy(value) {
   state.busy = value;
   els.sendBtn.disabled = value || state.rawSession;
   els.input.disabled = value || state.rawSession;
+  for (const button of els.sessionsList.querySelectorAll(".session-delete")) {
+    button.disabled = value;
+  }
   els.composerState.textContent = value ? "思考中" : state.rawSession ? "只读会话" : "";
 }
 
@@ -244,19 +249,61 @@ function roleLabel(role) {
   return labels[role] || role || "message";
 }
 
-function scrollMessagesToBottom() {
-  els.chatScroll.scrollTop = els.chatScroll.scrollHeight;
+function toolCallName(call) {
+  return call?.function?.name || call?.name || "unknown";
 }
 
-function renderMessages(messages) {
+function renderToolDisclosure(message, toolNamesByCallId) {
+  const isRequest = message.role === "assistant";
+  const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+  const names = isRequest
+    ? calls.map(toolCallName)
+    : [toolNamesByCallId.get(message.tool_call_id) || message.name || "unknown"];
+  const label = isRequest ? "工具请求" : "工具结果";
+
+  const details = document.createElement("details");
+  details.className = "tool-disclosure";
+
+  const summary = document.createElement("summary");
+  const summaryLabel = document.createElement("span");
+  summaryLabel.textContent = label;
+  const summaryTools = document.createElement("code");
+  summaryTools.textContent = [...new Set(names)].join(", ");
+  summary.append(summaryLabel, summaryTools);
+
+  const content = document.createElement("pre");
+  content.textContent = isRequest
+    ? JSON.stringify(calls, null, 2)
+    : messageText(message);
+
+  details.append(summary, content);
+  return details;
+}
+
+function scrollMessagesToBottom(force = false) {
+  const { scrollTop, scrollHeight, clientHeight } = els.chatScroll;
+  const isNearBottom = scrollHeight - scrollTop - clientHeight < 150;
+  if (force || isNearBottom) {
+    els.chatScroll.scrollTop = els.chatScroll.scrollHeight;
+  }
+}
+
+function renderMessages(messages, forceScroll = false) {
+  const { scrollTop, scrollHeight, clientHeight } = els.chatScroll;
+  const isNearBottom = scrollHeight === 0 || (scrollHeight - scrollTop - clientHeight < 150);
+
   els.messages.innerHTML = "";
   const visibleMessages = (messages || []).filter((message) => message.role !== "system");
   if (visibleMessages.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "empty-state";
-    empty.textContent = "新的 Web 会话";
-    els.messages.append(empty);
+    renderChatEmptyState();
     return;
+  }
+
+  const toolNamesByCallId = new Map();
+  for (const message of visibleMessages) {
+    for (const call of message.tool_calls || []) {
+      if (call?.id) toolNamesByCallId.set(call.id, toolCallName(call));
+    }
   }
 
   for (const message of visibleMessages) {
@@ -269,12 +316,93 @@ function renderMessages(messages) {
 
     const body = document.createElement("div");
     body.className = "message-body";
-    body.textContent = messageText(message);
+    const hasToolRequest = message.role === "assistant"
+      && Array.isArray(message.tool_calls)
+      && message.tool_calls.length > 0;
+    if (message.role === "tool") {
+      body.append(renderToolDisclosure(message, toolNamesByCallId));
+    } else if (message.role === "assistant" && message.display_html) {
+      body.classList.add("markdown-body");
+      body.innerHTML = message.display_html;
+
+      body.querySelectorAll("pre").forEach((pre) => {
+        const wrapper = document.createElement("div");
+        wrapper.className = "code-block-wrapper";
+        pre.parentNode.insertBefore(wrapper, pre);
+        wrapper.appendChild(pre);
+
+        const copyBtn = document.createElement("button");
+        copyBtn.type = "button";
+        copyBtn.className = "text-button copy-code-btn";
+        copyBtn.textContent = "复制";
+        copyBtn.addEventListener("click", async () => {
+          const text = pre.querySelector("code")?.textContent || pre.textContent;
+          try {
+            await navigator.clipboard.writeText(text);
+            copyBtn.textContent = "已复制!";
+            copyBtn.classList.add("copied");
+            setTimeout(() => {
+              copyBtn.textContent = "复制";
+              copyBtn.classList.remove("copied");
+            }, 2000);
+          } catch (err) {
+            copyBtn.textContent = "失败";
+            setTimeout(() => (copyBtn.textContent = "复制"), 2000);
+          }
+        });
+        wrapper.appendChild(copyBtn);
+      });
+    } else {
+      body.textContent = messageText(message);
+    }
+    if (hasToolRequest) {
+      body.append(renderToolDisclosure(message, toolNamesByCallId));
+    }
 
     item.append(role, body);
     els.messages.append(item);
   }
-  scrollMessagesToBottom();
+  if (forceScroll || isNearBottom) {
+    scrollMessagesToBottom(true);
+  } else {
+    els.chatScroll.scrollTop = scrollTop;
+  }
+}
+
+function renderChatEmptyState() {
+  const empty = document.createElement("section");
+  empty.className = "empty-state chat-empty";
+
+  const mark = document.createElement("div");
+  mark.className = "empty-mark";
+  mark.setAttribute("aria-hidden", "true");
+
+  const title = document.createElement("h3");
+  title.textContent = "今天想先处理什么？";
+
+  const description = document.createElement("p");
+  description.textContent = "可以从一个具体任务开始。";
+
+  const suggestions = document.createElement("div");
+  suggestions.className = "empty-suggestions";
+  const prompts = [
+    ["整理当前项目", "请总结当前项目状态，并列出最值得先处理的三件事。"],
+    ["搜索 AI 动态", "请搜索今天值得关注的 AI 动态，并给出简短分析。"],
+    ["查看近期记忆", "请结合近期记忆，告诉我目前有哪些待处理事项。"],
+  ];
+  for (const [label, prompt] of prompts) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.addEventListener("click", () => {
+      els.input.value = prompt;
+      els.input.focus();
+    });
+    suggestions.append(button);
+  }
+
+  empty.append(mark, title, description, suggestions);
+  els.messages.append(empty);
 }
 
 function renderSessions(sessions = state.sessions) {
@@ -295,6 +423,9 @@ function renderSessions(sessions = state.sessions) {
   }
 
   for (const session of rows) {
+    const row = document.createElement("div");
+    row.className = "session-row";
+
     const button = document.createElement("button");
     const isWeb = session.channel === "web";
     const label = isWeb ? session.chat_id : session.id;
@@ -319,9 +450,54 @@ function renderSessions(sessions = state.sessions) {
         setMobileSidebarOpen(false);
       }
     });
-    els.sessionsList.append(button);
+
+    row.append(button);
+    if (isWeb) {
+      const deleteButton = document.createElement("button");
+      deleteButton.type = "button";
+      deleteButton.className = "session-delete";
+      deleteButton.textContent = "×";
+      deleteButton.title = `删除会话 ${label}`;
+      deleteButton.setAttribute("aria-label", `删除会话 ${label}`);
+      deleteButton.disabled = state.busy;
+      deleteButton.addEventListener("click", () => {
+        deleteSession(session).catch((error) => {
+          setStatus("删除失败", "error");
+          els.composerState.textContent = error.message;
+        });
+      });
+      row.append(deleteButton);
+    }
+    els.sessionsList.append(row);
   }
   updateMetrics();
+}
+
+async function deleteSession(session) {
+  const label = session.channel === "web" ? session.chat_id : "";
+  if (!label || state.busy) return;
+  if (!window.confirm(`删除会话 ${label}？此操作不能撤销。`)) return;
+
+  const data = await fetchJson("/api/session", {
+    method: "DELETE",
+    body: JSON.stringify({ session_id: label }),
+  });
+  state.sessions = data.sessions || [];
+  setStatus("已删除", "ready");
+
+  if (label !== state.sessionId || state.rawSession) {
+    renderSessions();
+    return;
+  }
+
+  const next = state.sessions.find((item) => item.channel === "web");
+  if (next) {
+    state.sessionId = next.chat_id;
+    state.rawSession = false;
+    await loadSession(next.chat_id, false);
+    return;
+  }
+  newSession();
 }
 
 function renderMemory() {
@@ -387,12 +563,39 @@ function renderFileBreadcrumb() {
   }
 }
 
-function renderFilePreviewEmpty(text = "选择一个文本文件进行预览") {
+function openFilePreviewModal() {
+  if (!els.filePreviewModal.open) {
+    els.filePreviewModal.showModal();
+  }
+}
+
+function closeFilePreviewModal() {
+  if (els.filePreviewModal.open) {
+    els.filePreviewModal.close();
+  }
+}
+
+function renderFilePreviewEmpty(text = "这个文件不能直接预览，可以下载查看", file = null) {
   els.filePreview.innerHTML = "";
+  if (file?.path) {
+    const title = document.createElement("div");
+    title.className = "preview-title";
+
+    const name = document.createElement("strong");
+    name.textContent = file.name || file.path;
+
+    const link = document.createElement("a");
+    link.href = downloadUrl(file.path);
+    link.textContent = "下载";
+
+    title.append(name, link);
+    els.filePreview.append(title);
+  }
   const empty = document.createElement("div");
   empty.className = "preview-empty";
   empty.textContent = text;
   els.filePreview.append(empty);
+  openFilePreviewModal();
 }
 
 function renderFilePreviewContent(file, content) {
@@ -412,6 +615,7 @@ function renderFilePreviewContent(file, content) {
   const pre = document.createElement("pre");
   pre.textContent = content;
   els.filePreview.append(title, pre);
+  openFilePreviewModal();
 }
 
 function renderFiles() {
@@ -512,15 +716,13 @@ async function loadFiles(path = state.filePath) {
     els.analysisDownloadLink.href = downloadUrl(files.record_path);
   }
   renderFiles();
-  if (!els.filePreview.childElementCount) {
-    renderFilePreviewEmpty();
-  }
+  closeFilePreviewModal();
   return files;
 }
 
 async function previewFile(entry) {
   if (!entry.previewable) {
-    renderFilePreviewEmpty("这个文件不能直接预览，可以下载查看");
+    renderFilePreviewEmpty("这个文件不能直接预览，可以下载查看", entry);
     return;
   }
   const data = await fetchJson(`/api/files/preview?path=${encodeURIComponent(entry.path)}`);
@@ -547,7 +749,7 @@ async function renameEntry(entry) {
   });
   state.fileEntries = data.files?.entries || [];
   renderFiles();
-  renderFilePreviewEmpty();
+  closeFilePreviewModal();
 }
 
 async function deleteEntry(entry) {
@@ -558,7 +760,7 @@ async function deleteEntry(entry) {
   });
   state.fileEntries = data.files?.entries || [];
   renderFiles();
-  renderFilePreviewEmpty();
+  closeFilePreviewModal();
 }
 
 async function uploadFiles() {
@@ -576,7 +778,8 @@ async function uploadFiles() {
     });
     state.fileEntries = data.files?.entries || [];
     renderFiles();
-    renderFilePreviewEmpty(`${files.length} 个文件已上传`);
+    closeFilePreviewModal();
+    setStatus(`${files.length} 个文件已上传`, "ready");
   } catch (error) {
     showFileError(error);
   } finally {
@@ -665,7 +868,7 @@ async function loadSession(sessionId = state.sessionId, raw = state.rawSession) 
   els.sessionTitle.textContent = state.sessionId;
   updateMetrics(session);
   setBusy(false);
-  renderMessages(session.messages || []);
+  renderMessages(session.messages || [], true);
   await loadSessions();
 }
 
@@ -739,6 +942,7 @@ function submitComposer() {
   const message = els.input.value.trim();
   if (!message || state.busy || state.rawSession) return;
   els.input.value = "";
+  els.input.style.height = "auto";
   sendMessage(message);
 }
 
@@ -756,7 +960,7 @@ function renderOptimisticUserMessage(message) {
 
   item.append(role, body);
   els.messages.append(item);
-  scrollMessagesToBottom();
+  scrollMessagesToBottom(true);
 }
 
 function renderStreamingAssistantMessage() {
@@ -772,7 +976,7 @@ function renderStreamingAssistantMessage() {
 
   item.append(role, body);
   els.messages.append(item);
-  scrollMessagesToBottom();
+  scrollMessagesToBottom(true);
   return { item, body };
 }
 
@@ -804,7 +1008,18 @@ els.input.addEventListener("keydown", (event) => {
   submitComposer();
 });
 
+els.input.addEventListener("input", function () {
+  this.style.height = "auto";
+  this.style.height = Math.min(this.scrollHeight, 180) + "px";
+});
+
 document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && els.filePreviewModal.open) {
+    event.preventDefault();
+    closeFilePreviewModal();
+    return;
+  }
+
   if (event.key === "Escape" && state.mobileSidebarOpen) {
     event.preventDefault();
     setMobileSidebarOpen(false);
@@ -893,6 +1108,16 @@ els.fileUpBtn.addEventListener("click", () => loadFiles(state.fileParent).catch(
 els.fileUploadBtn.addEventListener("click", () => els.fileUploadInput.click());
 els.fileUploadInput.addEventListener("change", uploadFiles);
 els.fileMkdirBtn.addEventListener("click", () => makeDirectory().catch(showFileError));
+els.filePreviewClose.addEventListener("click", closeFilePreviewModal);
+els.filePreviewModal.addEventListener("click", (event) => {
+  if (event.target === els.filePreviewModal) {
+    closeFilePreviewModal();
+  }
+});
+els.filePreviewModal.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  closeFilePreviewModal();
+});
 els.analysisForm.addEventListener("submit", (event) => {
   event.preventDefault();
   submitAnalysis();

@@ -14,6 +14,7 @@ import threading
 import traceback
 import warnings
 from datetime import datetime, timezone
+from html import escape as html_escape
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -43,6 +44,7 @@ MEMORY_FILES = [
 DEFAULT_MAX_BODY_BYTES = 52_428_800
 MAX_PREVIEW_BYTES = 1_000_000
 AUTH_REALM = "taleclaw"
+_CHAT_MARKDOWN = None
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -128,6 +130,19 @@ class AgentService:
         )
         return future.result(timeout=timeout)
 
+    def delete_session(self, session_id: str, timeout: int = 10) -> bool:
+        if self._thread is None and self._runtime is None:
+            return _delete_stored_session(session_id)
+
+        self.ensure_started()
+        if self._loop is None:
+            raise RuntimeError("Agent runtime loop is not available.")
+        future = asyncio.run_coroutine_threadsafe(
+            self._delete_session_async(session_id),
+            self._loop,
+        )
+        return future.result(timeout=timeout)
+
     def stop(self) -> None:
         if self._loop is None:
             return
@@ -197,6 +212,16 @@ class AgentService:
             finally:
                 self._pending.pop(session_id, None)
 
+    async def _delete_session_async(self, session_id: str) -> bool:
+        if self._runtime is None or self._turn_lock is None:
+            raise RuntimeError("Agent runtime is not started.")
+
+        async with self._turn_lock:
+            sessions = getattr(getattr(self._runtime, "loop", None), "sessions", None)
+            if sessions is None:
+                raise RuntimeError("Agent session manager is not available.")
+            return sessions.delete(session_id)
+
 
 def _friendly_runtime_error(exc: BaseException) -> str:
     if isinstance(exc, KeyError) and exc.args and exc.args[0] == "DEEPSEEK_API_KEY":
@@ -229,6 +254,29 @@ def read_sessions() -> list[dict[str, Any]]:
     return sessions
 
 
+def _delete_stored_session(session_id: str) -> bool:
+    from sessions.session_store import SessionStore
+
+    store = SessionStore(SESSIONS_DB)
+    try:
+        return store.delete_session(session_id)
+    finally:
+        store.close()
+
+
+def _web_storage_id(session_id: str) -> str:
+    value = str(session_id or "").strip()
+    if not value:
+        raise ValueError("session_id is required")
+
+    channel, separator, chat_id = value.partition(":")
+    if separator:
+        if channel != "web" or not chat_id:
+            raise ValueError("Only Web sessions can be deleted.")
+        return value
+    return f"web:{value}"
+
+
 def _is_internal_task_session(row: dict[str, Any]) -> bool:
     metadata = row.get("metadata") or {}
     return row.get("id", "").startswith("task:") or metadata.get("kind") == "task_session"
@@ -258,7 +306,40 @@ def read_session(session_id: str, *, raw: bool = False) -> dict[str, Any]:
     session["channel"] = channel if chat_id else ""
     session["chat_id"] = chat_id if chat_id else session["id"]
     session["can_chat"] = channel == "web" and bool(chat_id)
+    session["messages"] = [_web_message(message) for message in session["messages"]]
     return session
+
+
+def _web_message(message: dict[str, Any]) -> dict[str, Any]:
+    result = dict(message)
+    content = result.get("content")
+    if result.get("role") == "assistant" and isinstance(content, str):
+        result["display_html"] = render_chat_markdown(content)
+    return result
+
+
+def render_chat_markdown(text: str) -> str:
+    global _CHAT_MARKDOWN
+
+    try:
+        import mistune
+    except ImportError:
+        return f"<p>{html_escape(text).replace(chr(10), '<br>')}</p>"
+
+    if _CHAT_MARKDOWN is None:
+        class SafeChatRenderer(mistune.HTMLRenderer):
+            def link(self, text: str, url: str, title: str | None = None) -> str:
+                if urlparse(url).scheme not in {"http", "https", "mailto"}:
+                    return text
+                return super().link(text, url, title)
+
+            def image(self, text: str, url: str, title: str | None = None) -> str:
+                return html_escape(f"[image: {text or 'attachment'}]")
+
+        _CHAT_MARKDOWN = mistune.create_markdown(
+            renderer=SafeChatRenderer(escape=True),
+        )
+    return _CHAT_MARKDOWN(text)
 
 
 def read_memory_files() -> list[dict[str, str]]:
@@ -473,9 +554,18 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._handle_delete()
             return
 
-        if parsed.path != "/api/chat":
-            self._send_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
+        self._send_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
+
+    def do_DELETE(self) -> None:
+        if not self._authorize():
             return
+
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/session":
+            self._handle_session_delete()
+            return
+
+        self._send_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
 
     def _handle_chat(self) -> None:
         try:
@@ -492,6 +582,30 @@ class RequestHandler(BaseHTTPRequestHandler):
                 "session_id": session_id,
                 "session": read_session(session_id),
             })
+        except Exception as exc:
+            traceback.print_exc()
+            self._send_json(
+                {
+                    "error": _friendly_runtime_error(exc),
+                    "error_type": type(exc).__name__,
+                },
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
+
+    def _handle_session_delete(self) -> None:
+        try:
+            payload = self._read_json_body()
+            storage_id = _web_storage_id(payload.get("session_id", ""))
+            if not self.agent_service.delete_session(storage_id):
+                self._send_json({"error": "Session not found"}, status=HTTPStatus.NOT_FOUND)
+                return
+            self._send_json({
+                "deleted": True,
+                "session_id": storage_id.removeprefix("web:"),
+                "sessions": read_sessions(),
+            })
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
         except Exception as exc:
             traceback.print_exc()
             self._send_json(
@@ -821,7 +935,7 @@ class RequestHandler(BaseHTTPRequestHandler):
     def _send_cors_headers(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stdout.write("%s - %s\n" % (self.address_string(), fmt % args))

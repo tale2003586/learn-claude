@@ -74,5 +74,9 @@ class SessionManager:
     def list_sessions(self) -> list[dict[str, Any]]:
         return self._store.list_sessions()
 
+    def delete(self, session_id: str) -> bool:
+        self._sessions.pop(session_id, None)
+        return self._store.delete_session(session_id)
+
     def close(self) -> None:
         self._store.close()

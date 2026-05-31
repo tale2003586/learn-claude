@@ -149,6 +149,19 @@ class SessionStore:
             for row in rows
         ]
 
+    def delete_session(self, session_id: str) -> bool:
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM messages WHERE session_id = ?",
+                (session_id,),
+            )
+            cursor = self._conn.execute(
+                "DELETE FROM sessions WHERE id = ?",
+                (session_id,),
+            )
+            self._conn.commit()
+        return cursor.rowcount > 0
+
     def close(self) -> None:
         with self._lock:
             self._conn.close()

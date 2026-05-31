@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from core.provider import OpenAICompatibleProvider
-from web.server import RequestHandler
+from web.server import RequestHandler, render_chat_markdown
 
 
 def _chunk(*, content=None, tool_calls=None):
@@ -62,6 +62,23 @@ class StreamingProviderTests(unittest.TestCase):
 
 
 class StreamingHttpTests(unittest.TestCase):
+    def test_chat_markdown_renders_formatting_and_escapes_unsafe_content(self) -> None:
+        html = render_chat_markdown(
+            "# 标题\n\n"
+            "**重点** [安全链接](https://example.com) "
+            "[危险链接](javascript:alert(1))\n\n"
+            "<script>alert('x')</script>\n\n"
+            "![远程图](https://example.com/image.png)\n"
+        )
+
+        self.assertIn("<h1>标题</h1>", html)
+        self.assertIn("<strong>重点</strong>", html)
+        self.assertIn('href="https://example.com"', html)
+        self.assertNotIn('href="javascript:', html)
+        self.assertNotIn("<script>", html)
+        self.assertIn("&lt;script&gt;", html)
+        self.assertIn("[image: 远程图]", html)
+
     def test_chat_stream_endpoint_returns_delta_and_complete_events(self) -> None:
         class AgentService:
             def ask_stream(self, *, session_id, content, on_text):

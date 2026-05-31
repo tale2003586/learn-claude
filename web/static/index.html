@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>taleclaw</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🤖</text></svg>">
     <link rel="stylesheet" href="/static/styles.css">
     <script defer src="/static/app.js"></script>
   </head>
@@ -12,6 +13,9 @@
       <aside id="sidebar" class="sidebar">
         <header class="sidebar-top">
           <div class="brand-row">
+            <div class="brand-mark" aria-hidden="true">
+              <span></span>
+            </div>
             <div class="brand-copy">
               <h1>taleclaw</h1>
               <p id="workspaceLabel">workspace</p>
@@ -36,7 +40,7 @@
               <button id="newSessionBtn" class="icon-button" type="button" title="新会话" aria-label="新会话">+</button>
             </div>
             <div class="filter-row">
-              <input id="sessionSearch" type="search" placeholder="搜索会话">
+            <input id="sessionSearch" type="search" placeholder="搜索会话" aria-label="搜索会话" autocomplete="off">
             </div>
             <div id="sessionsList" class="sessions-list"></div>
           </section>
@@ -117,12 +121,13 @@
           <header class="chat-header">
             <div class="chat-title-row">
               <button id="mobileSidebarOpen" class="mobile-sidebar-button" type="button" aria-label="打开侧栏" aria-controls="sidebar" aria-expanded="false">☰</button>
-              <div>
-                <p class="eyebrow">当前会话</p>
+              <div class="chat-session-copy">
+                <p class="eyebrow"><span class="presence-dot" aria-hidden="true"></span>当前会话</p>
                 <h2 id="sessionTitle">default</h2>
               </div>
             </div>
             <div class="mode-actions" aria-label="模式切换">
+              <span class="mode-caption">Mode</span>
               <button data-command="/hybrid" type="button">Hybrid</button>
               <button data-command="/chat" type="button">Chat</button>
               <button data-command="/coding" type="button">Coding</button>
@@ -135,7 +140,11 @@
 
           <div class="composer-dock">
             <form id="composer" class="composer">
-              <textarea id="messageInput" rows="3" placeholder="输入消息"></textarea>
+              <label class="composer-label" for="messageInput">
+                <span class="composer-mark" aria-hidden="true"></span>
+                写给 taleclaw
+              </label>
+              <textarea id="messageInput" rows="3" placeholder="输入消息" spellcheck="false"></textarea>
               <div class="composer-actions">
                 <span id="composerState"></span>
                 <button id="sendBtn" type="submit">发送</button>
@@ -147,7 +156,7 @@
         <section class="main-view files-pane" data-main-view-panel="files">
           <header class="tool-header">
             <div class="chat-title-row">
-              <button class="mobile-sidebar-button mobile-secondary-open" type="button" aria-label="打开侧栏">☰</button>
+              <button class="mobile-sidebar-button mobile-secondary-open" type="button" aria-label="打开侧栏" aria-controls="sidebar" aria-expanded="false">☰</button>
               <div>
                 <p class="eyebrow">Storage</p>
                 <h2>文件</h2>
@@ -164,13 +173,12 @@
             <div id="fileBreadcrumb" class="file-breadcrumb"></div>
             <div id="fileList" class="file-list"></div>
           </div>
-          <aside id="filePreview" class="file-preview"></aside>
         </section>
 
         <section class="main-view analysis-pane" data-main-view-panel="analysis">
           <header class="tool-header">
             <div class="chat-title-row">
-              <button class="mobile-sidebar-button mobile-secondary-open" type="button" aria-label="打开侧栏">☰</button>
+              <button class="mobile-sidebar-button mobile-secondary-open" type="button" aria-label="打开侧栏" aria-controls="sidebar" aria-expanded="false">☰</button>
               <div>
                 <p class="eyebrow">Text</p>
                 <h2>分析记录</h2>
@@ -180,7 +188,7 @@
           </header>
           <div class="analysis-grid">
             <form id="analysisForm" class="analysis-form">
-              <textarea id="analysisInput" rows="12" placeholder="粘贴需要分析的文字"></textarea>
+              <textarea id="analysisInput" rows="12" placeholder="粘贴需要分析的文字" aria-label="需要分析的文字" spellcheck="false"></textarea>
               <div class="composer-actions">
                 <span id="analysisState"></span>
                 <button id="analysisSubmitBtn" type="submit">分析并保存</button>
@@ -196,5 +204,18 @@
         </section>
       </div>
     </main>
+
+    <dialog id="filePreviewModal" class="file-preview-modal" aria-labelledby="filePreviewModalTitle">
+      <section class="file-preview-dialog">
+        <header class="preview-modal-head">
+          <div>
+            <p class="eyebrow">Preview</p>
+            <h2 id="filePreviewModalTitle">文件预览</h2>
+          </div>
+          <button id="filePreviewClose" class="modal-close" type="button" aria-label="关闭文件预览" title="关闭">×</button>
+        </header>
+        <aside id="filePreview" class="file-preview"></aside>
+      </section>
+    </dialog>
   </body>
 </html>
