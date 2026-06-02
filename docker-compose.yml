@@ -25,6 +25,7 @@ services:
       - ./.team:/app/.team
       - ./.transcripts:/app/.transcripts
       - ./.scheduler:/app/.scheduler
+      - ./.users:/app/.users
 
   scheduler-worker:
     build:
@@ -48,3 +49,4 @@ services:
       - ./.task_sessions:/app/.task_sessions
       - ./.task_sandbox:/app/.task_sandbox
       - ./.scheduler:/app/.scheduler
+      - ./.users:/app/.users

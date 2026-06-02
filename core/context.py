@@ -24,7 +24,7 @@ class ContextBuilder:
 
     ) -> ContextBundle:
         system_prompt = self._build_system_prompt(profile=profile)
-        memory_block = self._build_memory_block()
+        memory_block = self._build_memory_block(session)
 
         context_frame = self._build_context_frame(
             memory_block=memory_block,
@@ -86,13 +86,15 @@ class ContextBuilder:
         ]
         return "\n\n".join(section for section in sections if section.strip())
     
-    def _build_memory_block(self) -> str:
+    def _build_memory_block(self, session) -> str:
         if self.memory_store is None:
             return ""
 
-        text = self.memory_store.read_all().strip()
+        store = self.memory_store
+        if hasattr(store, "for_session"):
+            store = store.for_session(session)
+        text = store.read_all().strip()
         if not text:
             return ""
 
         return "<memory>\n" + text + "\n</memory>"
-

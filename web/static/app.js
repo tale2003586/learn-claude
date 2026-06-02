@@ -15,6 +15,7 @@ const state = {
   fileParent: "",
   fileEntries: [],
   analysisBusy: false,
+  currentUser: { id: "local", role: "admin" },
 };
 
 const els = {
@@ -47,6 +48,8 @@ const els = {
   modeMetric: document.querySelector("#modeMetric"),
   sessionCountMetric: document.querySelector("#sessionCountMetric"),
   memoryCountMetric: document.querySelector("#memoryCountMetric"),
+  currentUserMetric: document.querySelector("#currentUserMetric"),
+  logoutBtn: document.querySelector("#logoutBtn"),
   refreshFilesBtn: document.querySelector("#refreshFilesBtn"),
   filePathLabel: document.querySelector("#filePathLabel"),
   fileCountMetric: document.querySelector("#fileCountMetric"),
@@ -81,6 +84,10 @@ async function fetchJson(url, options = {}) {
   const data = contentType.includes("application/json")
     ? await response.json()
     : { error: await response.text() };
+  if (response.status === 401) {
+    redirectToLogin();
+    throw new Error("登录状态已失效");
+  }
   if (!response.ok) {
     throw new Error(data.error || `HTTP ${response.status}`);
   }
@@ -96,6 +103,10 @@ async function fetchJsonStream(url, options = {}, onEvent = () => {}) {
     ...options,
     headers,
   });
+  if (response.status === 401) {
+    redirectToLogin();
+    throw new Error("登录状态已失效");
+  }
   if (!response.ok) {
     const contentType = response.headers.get("Content-Type") || "";
     const data = contentType.includes("application/json")
@@ -129,6 +140,11 @@ async function fetchJsonStream(url, options = {}, onEvent = () => {}) {
 function setStatus(text, kind = "") {
   els.statusBadge.textContent = text;
   els.statusBadge.className = `status-badge ${kind}`.trim();
+}
+
+function redirectToLogin() {
+  const next = `${window.location.pathname}${window.location.search}`;
+  window.location.assign(`/login?next=${encodeURIComponent(next)}`);
 }
 
 function setBusy(value) {
@@ -213,6 +229,7 @@ function updateMetrics(session = {}) {
   els.modeMetric.textContent = mode;
   els.sessionCountMetric.textContent = String(state.sessions.length);
   els.memoryCountMetric.textContent = String(state.memoryFiles.length);
+  els.currentUserMetric.textContent = `${state.currentUser.id} · ${state.currentUser.role}`;
   const activeCommand = {
     hybrid: "/hybrid",
     bot: "/chat",
@@ -840,13 +857,29 @@ function formatDate(value) {
 async function loadHealth() {
   try {
     const data = await fetchJson("/api/health");
-    els.workspaceLabel.textContent = data.workspace;
+    state.currentUser = data.user || state.currentUser;
+    els.workspaceLabel.textContent = `${state.currentUser.id} · ${state.currentUser.role}`;
     els.workspacePath.textContent = data.workspace;
+    for (const button of els.modeActions.querySelectorAll("[data-required-role]")) {
+      button.hidden = button.dataset.requiredRole !== state.currentUser.role;
+    }
+    updateMetrics();
     setStatus("就绪", "ready");
   } catch (error) {
     setStatus("异常", "error");
     els.workspaceLabel.textContent = error.message;
     els.workspacePath.textContent = error.message;
+  }
+}
+
+async function logout() {
+  try {
+    await fetchJson("/api/auth/logout", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+  } finally {
+    window.location.assign("/login");
   }
 }
 
@@ -1052,6 +1085,7 @@ document.addEventListener("keydown", (event) => {
   };
   const command = modeCommands[event.key];
   if (!command || state.busy || state.rawSession) return;
+  if (command === "/coding" && state.currentUser.role !== "admin") return;
   event.preventDefault();
   sendMessage(command);
 });
@@ -1102,6 +1136,7 @@ els.sidebarOverlay.addEventListener("click", () => {
 window.addEventListener("resize", syncResponsiveSidebar);
 
 els.newSessionBtn.addEventListener("click", newSession);
+els.logoutBtn.addEventListener("click", logout);
 els.refreshMemoryBtn.addEventListener("click", loadMemory);
 els.refreshFilesBtn.addEventListener("click", () => loadFiles().catch(showFileError));
 els.fileUpBtn.addEventListener("click", () => loadFiles(state.fileParent).catch(showFileError));

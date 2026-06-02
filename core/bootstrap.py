@@ -17,6 +17,7 @@ from memory.archive_store import MemoryArchiveStore
 from memory.history_summary import HistorySummarizer
 from memory.lifecycle import MemoryLifecycle
 from memory.store import MemoryStore
+from memory.scoped_store import ScopedMemoryStore
 from plugins import PluginManager
 from plugins.shell_safety import ShellSafetyPlugin
 from plugins.status_commands import StatusCommandsPlugin
@@ -40,7 +41,7 @@ def build_runtime() -> AppRuntime:
         ),
     )
 
-    memory_store = MemoryStore()
+    memory_store = ScopedMemoryStore(WORKDIR, legacy_store=MemoryStore())
     memory_archive_store = MemoryArchiveStore()
     context_builder = ContextBuilder(memory_store=memory_store)
     memory_lifecycle = MemoryLifecycle(

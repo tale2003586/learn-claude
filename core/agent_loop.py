@@ -27,6 +27,7 @@ class AgentLoop:
         inbound = await self.bus.consume_inbound()
 
         session = self.sessions.get_or_create(inbound.session_key)
+        self._apply_inbound_identity(session, inbound)
 
         if self.plugin_manager is not None:
             plugin_result = self.plugin_manager.before_turn(inbound, session)
@@ -106,3 +107,9 @@ class AgentLoop:
     ) -> None:
         if on_text is not None and content:
             on_text(content)
+
+    def _apply_inbound_identity(self, session, inbound) -> None:
+        metadata = inbound.metadata or {}
+        for key in ("user_id", "user_role"):
+            if key in metadata and key not in session.metadata:
+                session.metadata[key] = metadata[key]

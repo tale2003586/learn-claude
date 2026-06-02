@@ -1,6 +1,6 @@
 import asyncio
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Any, Callable
 
 from bus.events import InboundMessage
 from bus.user_bus import MessageBus
@@ -31,12 +31,14 @@ class AppRuntime:
         channel: str = "cli",
         chat_id: str = "local",
         sender: str = "user",
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         await self.bus.publish_inbound(InboundMessage(
             channel=channel,
             chat_id=chat_id,
             sender=sender,
             content=content,
+            metadata=metadata or {},
         ))
 
     async def run_once(self, on_text: Callable[[str], None] | None = None) -> None:

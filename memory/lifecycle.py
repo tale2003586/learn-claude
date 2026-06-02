@@ -31,6 +31,9 @@ class MemoryLifecycle:
         self.recent_limit = max(1, recent_limit)
 
     def after_turn(self, session) -> MemoryLifecycleResult:
+        store = self.store
+        if hasattr(store, "for_session"):
+            store = store.for_session(session)
         user_text = self._last_text(session.messages, "user")
         assistant_text = self._last_text(session.messages, "assistant")
         if not user_text and not assistant_text:
@@ -41,13 +44,13 @@ class MemoryLifecycle:
 
         explicit = self._extract_explicit_memory(user_text)
         if explicit:
-            save_result = self.store.append("memory", explicit)
+            save_result = store.append("memory", explicit)
             if save_result.startswith("Saved"):
                 result.pending_added += 1
         else:
             candidate = self._extract_candidate(user_text)
             if candidate:
-                save_result = self.store.append_pending(
+                save_result = store.append_pending(
                     candidate,
                     tag=self._tag_for_candidate(candidate),
                     source_ref=source_ref,
@@ -58,10 +61,10 @@ class MemoryLifecycle:
         assistant_summary = self.summarizer.summarize(assistant_text)
         history = self._format_history_entry(user_text, assistant_summary)
         if history:
-            self.store.append_history(history, source_ref=source_ref)
+            store.append_history(history, source_ref=source_ref)
             result.history_updated = True
 
-        recent_turns = self.store.read_recent_turns()
+        recent_turns = store.read_recent_turns()
         recent_turns.append(
             self._format_recent_turn(
                 session,
@@ -71,7 +74,7 @@ class MemoryLifecycle:
             )
         )
         evicted_turns = recent_turns[:-self.recent_limit]
-        self.store.write_recent_turns(recent_turns[-self.recent_limit :])
+        store.write_recent_turns(recent_turns[-self.recent_limit :])
         result.recent_context_updated = True
 
         if self.archive_store:

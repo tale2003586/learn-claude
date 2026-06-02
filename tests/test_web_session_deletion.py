@@ -44,8 +44,8 @@ class SessionDeletionStoreTests(unittest.TestCase):
 
 class WebSessionDeletionTests(unittest.TestCase):
     def test_web_storage_id_accepts_plain_or_web_id(self) -> None:
-        self.assertEqual("web:default", _web_storage_id("default"))
-        self.assertEqual("web:default", _web_storage_id("web:default"))
+        self.assertEqual("web:local:default", _web_storage_id("default"))
+        self.assertEqual("web:local:default", _web_storage_id("web:local:default"))
 
     def test_web_storage_id_rejects_non_web_session(self) -> None:
         with self.assertRaisesRegex(ValueError, "Only Web sessions"):
@@ -65,10 +65,10 @@ class WebSessionDeletionTests(unittest.TestCase):
         responses = []
         handler._send_json = lambda payload, status=HTTPStatus.OK: responses.append((payload, status))
 
-        with patch("web.server.read_sessions", return_value=[{"id": "web:remaining"}]):
+        with patch("web.server.read_sessions", return_value=[{"id": "web:local:remaining"}]):
             handler._handle_session_delete()
 
-        self.assertEqual(["web:default"], calls)
+        self.assertEqual(["web:local:default"], calls)
         self.assertEqual(HTTPStatus.OK, responses[0][1])
         self.assertTrue(responses[0][0]["deleted"])
         self.assertEqual("default", responses[0][0]["session_id"])

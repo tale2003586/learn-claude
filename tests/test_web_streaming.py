@@ -81,8 +81,9 @@ class StreamingHttpTests(unittest.TestCase):
 
     def test_chat_stream_endpoint_returns_delta_and_complete_events(self) -> None:
         class AgentService:
-            def ask_stream(self, *, session_id, content, on_text):
+            def ask_stream(self, *, session_id, content, user_id, user_role, on_text):
                 self.request = (session_id, content)
+                self.user = (user_id, user_role)
                 on_text("你")
                 on_text("好")
                 return "你好"
@@ -102,6 +103,7 @@ class StreamingHttpTests(unittest.TestCase):
             handler._handle_chat_stream()
 
         self.assertEqual(("default", "hello"), agent_service.request)
+        self.assertEqual(("local", "admin"), agent_service.user)
         self.assertEqual(["delta", "delta", "complete"], [event["type"] for event in events])
         self.assertEqual("你好", events[-1]["reply"])
 

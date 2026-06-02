@@ -6,6 +6,7 @@ from pathlib import Path
 from plugins.base import Plugin, ToolRegistration
 from plugins.markdown_pdf.renderer import render_markdown_pdf
 from tools.schema import function_tool
+from user_scope import explicit_user_id_for_session, storage_root_for_session
 
 
 DEFAULT_MAX_BYTES = 2 * 1024 * 1024
@@ -60,6 +61,7 @@ class MarkdownPdfPlugin(Plugin):
                 risk="normal",
                 enabled_modes={"bot", "coding"},
                 always_on=True,
+                session_scoped=True,
                 source="plugin:markdown_pdf",
             )
         ]
@@ -70,11 +72,13 @@ class MarkdownPdfPlugin(Plugin):
         output_path: str | None = None,
         title: str | None = None,
         overwrite: bool = False,
+        _session=None,
     ) -> str:
         source = self._resolve_workspace_path(
             input_path,
             label="input_path",
             suffixes=MARKDOWN_SUFFIXES,
+            session=_session,
         )
         if not source.is_file():
             raise ValueError(f"Markdown source does not exist: {input_path}")
@@ -86,11 +90,17 @@ class MarkdownPdfPlugin(Plugin):
                 f"limit is {self.max_bytes} bytes"
             )
 
-        destination_value = output_path or f"storage/generated/{source.stem}.pdf"
+        scoped = explicit_user_id_for_session(_session) is not None
+        destination_value = output_path or (
+            f"generated/{source.stem}.pdf"
+            if scoped
+            else f"storage/generated/{source.stem}.pdf"
+        )
         destination = self._resolve_workspace_path(
             destination_value,
             label="output_path",
             suffixes={".pdf"},
+            session=_session,
         )
         if destination.exists() and not overwrite:
             raise ValueError(
@@ -115,7 +125,7 @@ class MarkdownPdfPlugin(Plugin):
                 markdown_text=markdown_text,
                 source_path=source,
                 output_path=temporary_path,
-                workspace=self.workspace,
+                workspace=self._scope_root(_session),
                 title=(title or "").strip() or None,
             )
             os.replace(temporary_path, destination)
@@ -125,8 +135,8 @@ class MarkdownPdfPlugin(Plugin):
         return json.dumps(
             {
                 "status": "created",
-                "input_path": str(source.relative_to(self.workspace)),
-                "output_path": str(destination.relative_to(self.workspace)),
+                "input_path": self._display_path(source, _session),
+                "output_path": self._display_path(destination, _session),
                 "bytes": destination.stat().st_size,
                 "local_images": result.local_images,
                 "skipped_images": result.skipped_images,
@@ -141,17 +151,22 @@ class MarkdownPdfPlugin(Plugin):
         *,
         label: str,
         suffixes: set[str],
+        session=None,
     ) -> Path:
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"{label} is required")
 
-        relative = Path(value.strip())
+        raw_value = value.strip()
+        if explicit_user_id_for_session(session) is not None:
+            raw_value = raw_value.removeprefix("storage/")
+        relative = Path(raw_value)
         if relative.is_absolute():
             raise ValueError(f"{label} must be workspace-relative")
 
-        resolved = (self.workspace / relative).resolve()
+        root = self._scope_root(session)
+        resolved = (root / relative).resolve()
         try:
-            resolved.relative_to(self.workspace)
+            resolved.relative_to(root)
         except ValueError as exc:
             raise ValueError(f"{label} must stay inside the workspace") from exc
 
@@ -159,6 +174,16 @@ class MarkdownPdfPlugin(Plugin):
             allowed = ", ".join(sorted(suffixes))
             raise ValueError(f"{label} must use one of: {allowed}")
         return resolved
+
+    def _scope_root(self, session) -> Path:
+        if explicit_user_id_for_session(session) is None:
+            return self.workspace
+        return storage_root_for_session(self.workspace, session).resolve()
+
+    def _display_path(self, path: Path, session) -> str:
+        if explicit_user_id_for_session(session) is None:
+            return path.relative_to(self.workspace).as_posix()
+        return "storage/" + path.relative_to(self._scope_root(session)).as_posix()
 
 
 def _positive_int(value: str | None, *, default: int) -> int:

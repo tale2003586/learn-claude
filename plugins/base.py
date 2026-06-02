@@ -12,6 +12,8 @@ class ToolRegistration:
     risk: str = "normal"
     enabled_modes: set[str] | None = None
     always_on: bool = False
+    session_scoped: bool = False
+    admin_only: bool = False
     source: str = "plugin"
 
 

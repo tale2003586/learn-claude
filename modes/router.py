@@ -20,6 +20,13 @@ class ModeRouter:
         text = user_text.strip().lower()
 
         if text in {"/coding", "进入编程模式", "编程模式"}:
+            if not self._coding_allowed(session):
+                session.set_mode("bot")
+                return RouteResult(
+                    profile=BOT_PROFILE,
+                    switched=True,
+                    switch_message="当前账号没有 Coding 模式权限，已保持聊天模式。",
+                )
             session.set_mode("coding")
             return RouteResult(
                 profile=CODING_PROFILE,
@@ -43,14 +50,14 @@ class ModeRouter:
                 switch_message="已进入混合模式。",
             )
 
-        if session.current_mode == "coding":
+        if session.current_mode == "coding" and self._coding_allowed(session):
             return RouteResult(profile=CODING_PROFILE)
 
         if session.current_mode == "bot":
             return RouteResult(profile=BOT_PROFILE)
 
         # hybrid: 每轮判断
-        if self._looks_like_coding_request(text):
+        if self._coding_allowed(session) and self._looks_like_coding_request(text):
             if (
                 self.hybrid_classifier is not None
                 and self.hybrid_classifier.should_use_coding(user_text)
@@ -58,6 +65,10 @@ class ModeRouter:
                 return RouteResult(profile=CODING_PROFILE)
 
         return RouteResult(profile=BOT_PROFILE)
+
+    def _coding_allowed(self, session) -> bool:
+        metadata = getattr(session, "metadata", {}) or {}
+        return metadata.get("user_role", "admin") == "admin"
 
     def _looks_like_coding_request(self, text: str) -> bool:
         keywords = [

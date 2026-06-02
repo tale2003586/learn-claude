@@ -8,6 +8,7 @@ from .conclusions import TaskConclusionExtractor
 from .memory_lifecycle import TaskMemoryLifecycle
 from .promotion import TaskMemoryPromoter, PromotionResult
 from .session import TaskSessionFactory, TaskSessionRecord
+from user_scope import explicit_user_id_for_session, user_role_for_session
 
 
 class TaskSessionRunner:
@@ -22,7 +23,6 @@ class TaskSessionRunner:
         self.base_pipeline = base_pipeline
         self.global_memory = global_memory
         self.factory = TaskSessionFactory(sessions)
-        self.promoter = TaskMemoryPromoter(global_memory)
         self.conclusion_extractor = TaskConclusionExtractor(
             provider=base_pipeline.provider,
             model=base_pipeline.model,
@@ -30,10 +30,13 @@ class TaskSessionRunner:
         self.artifact_writer = TaskArtifactWriter()
 
     def run_coding_task(self, *, parent_session, user_text: str, profile) -> str:
+        global_memory = self._global_memory_for(parent_session)
         record = self.factory.create(
             parent_session_id=parent_session.id,
             task_type="coding",
             user_request=user_text,
+            user_id=explicit_user_id_for_session(parent_session),
+            user_role=user_role_for_session(parent_session),
         )
         task_memory = MemoryStore(record.memory_root)
         self._seed_task_memory(
@@ -43,7 +46,7 @@ class TaskSessionRunner:
         )
         record.session.add_message(
             "user",
-            self._build_task_request(parent_session.id, user_text),
+            self._build_task_request(parent_session.id, user_text, global_memory),
         )
 
         task_pipeline = self._build_task_pipeline(task_memory)
@@ -58,7 +61,7 @@ class TaskSessionRunner:
             task_summary=reply,
             messages=record.session.messages,
         )
-        promotion = self.promoter.promote(
+        promotion = TaskMemoryPromoter(global_memory).promote(
             task_id=record.task_id,
             task_memory=task_memory,
             extracted_conclusions=extraction.candidates,
@@ -117,8 +120,13 @@ class TaskSessionRunner:
             f"- task_request: {user_text}"
         )
 
-    def _build_task_request(self, parent_session_id: str, user_text: str) -> str:
-        global_memory = self.global_memory.read_all()
+    def _build_task_request(
+        self,
+        parent_session_id: str,
+        user_text: str,
+        global_memory: MemoryStore,
+    ) -> str:
+        global_memory_text = global_memory.read_all()
         return (
             f"<task-session parent_session=\"{parent_session_id}\">\n"
             "You are running in an isolated coding task session. "
@@ -128,10 +136,15 @@ class TaskSessionRunner:
             "section='pending' so it can be reviewed for global promotion.\n"
             "</task-session>\n\n"
             "<global-memory-snapshot>\n"
-            f"{global_memory}\n"
+            f"{global_memory_text}\n"
             "</global-memory-snapshot>\n\n"
             f"User coding task:\n{user_text}"
         )
+
+    def _global_memory_for(self, session) -> MemoryStore:
+        if hasattr(self.global_memory, "for_session"):
+            return self.global_memory.for_session(session)
+        return self.global_memory
 
     def _format_parent_reply(
         self,

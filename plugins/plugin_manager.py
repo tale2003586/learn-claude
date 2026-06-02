@@ -50,6 +50,8 @@ class PluginManager:
                 enabled_modes=tool.enabled_modes,
                 source=tool.source,
                 always_on=tool.always_on,
+                session_scoped=tool.session_scoped,
+                admin_only=tool.admin_only,
             )
             self._tool_names.append(tool.schema["function"]["name"])
 

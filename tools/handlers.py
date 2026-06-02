@@ -17,6 +17,11 @@ from memory.store import MemoryStore
 from coding_runtime.protocols import PROTOCOLS
 from skill_runtime import SKILL_LOADER
 from coding_runtime.task import TASKS
+from user_scope import (
+    explicit_user_id_for_session,
+    memory_root_for_session,
+    storage_root_for_session,
+)
 
 
 def safe_path(p: str) -> Path:
@@ -75,12 +80,12 @@ STORAGE_TEXT_SUFFIXES = {
 }
 
 
-def _storage_root() -> Path:
-    return (WORKDIR / "storage").resolve()
+def _storage_root(session=None) -> Path:
+    return storage_root_for_session(WORKDIR, session)
 
 
-def _generated_storage_root() -> Path:
-    storage_root = _storage_root()
+def _generated_storage_root(session=None) -> Path:
+    storage_root = _storage_root(session)
     generated = (storage_root / "generated").resolve()
     if generated != storage_root and not generated.is_relative_to(storage_root):
         raise ValueError("Generated storage directory escapes storage.")
@@ -114,8 +119,8 @@ def _safe_storage_path(root: Path, raw_path: str, *, allow_root: bool = False) -
     return target
 
 
-def _storage_relative(path: Path) -> str:
-    return path.relative_to(_storage_root()).as_posix()
+def _storage_relative(path: Path, *, session=None) -> str:
+    return path.relative_to(_storage_root(session)).as_posix()
 
 
 def _scope_relative(root: Path, path: Path) -> str:
@@ -205,9 +210,9 @@ def _read_text_file(target: Path, *, path_label: str, limit: int = None) -> str:
     return output
 
 
-def run_storage_list(path: str = "") -> str:
+def run_storage_list(path: str = "", *, _session=None) -> str:
     try:
-        root = _storage_root()
+        root = _storage_root(_session)
         root.mkdir(parents=True, exist_ok=True)
         target = _safe_storage_path(root, path, allow_root=True)
         if not target.exists():
@@ -230,13 +235,13 @@ def run_storage_list(path: str = "") -> str:
             stat = child.stat()
             entries.append({
                 "name": child.name,
-                "path": _storage_relative(resolved),
+                "path": _storage_relative(resolved, session=_session),
                 "is_dir": child.is_dir(),
                 "bytes": 0 if child.is_dir() else stat.st_size,
             })
 
         return json.dumps({
-            "path": _storage_relative(target) if target != root else "",
+            "path": _storage_relative(target, session=_session) if target != root else "",
             "entries": entries,
             "truncated": truncated,
         }, ensure_ascii=False, indent=2)
@@ -244,9 +249,9 @@ def run_storage_list(path: str = "") -> str:
         return f"Error: {e}"
 
 
-def run_storage_read(path: str, limit: int = None) -> str:
+def run_storage_read(path: str, limit: int = None, *, _session=None) -> str:
     try:
-        target = _safe_storage_path(_storage_root(), path)
+        target = _safe_storage_path(_storage_root(_session), path)
         return _read_text_file(target, path_label=path, limit=limit)
     except Exception as e:
         return f"Error: {e}"
@@ -256,7 +261,7 @@ def run_storage_write(path: str, content: str, *, _session=None) -> str:
     try:
         if not isinstance(content, str):
             raise ValueError("Storage artifact content must be text.")
-        target = _safe_storage_path(_generated_storage_root(), path)
+        target = _safe_storage_path(_generated_storage_root(_session), path)
         if target.suffix.lower() not in STORAGE_TEXT_SUFFIXES:
             allowed = ", ".join(sorted(STORAGE_TEXT_SUFFIXES))
             raise ValueError(f"Unsupported storage artifact type. Allowed suffixes: {allowed}")
@@ -267,7 +272,7 @@ def run_storage_write(path: str, content: str, *, _session=None) -> str:
             )
         if target.exists():
             raise FileExistsError(
-                f"Storage artifact already exists: {_storage_relative(target)}. "
+                f"Storage artifact already exists: {_storage_relative(target, session=_session)}. "
                 "Choose a new filename."
             )
 
@@ -284,23 +289,31 @@ def run_storage_write(path: str, content: str, *, _session=None) -> str:
             target=target,
             encoded=encoded,
             session_id=getattr(_session, "id", ""),
+            session=_session,
         )
         return json.dumps({
             "status": "created",
-            "path": _storage_relative(target),
+            "path": _storage_relative(target, session=_session),
             "bytes": len(encoded),
         }, ensure_ascii=False)
     except Exception as e:
         return f"Error: {e}"
 
 
-def _append_storage_write_record(*, target: Path, encoded: bytes, session_id: str) -> None:
+def _append_storage_write_record(
+    *,
+    target: Path,
+    encoded: bytes,
+    session_id: str,
+    session=None,
+) -> None:
     _append_artifact_record(
         operation="storage_write",
         target=target,
         session_id=session_id,
         byte_count=len(encoded),
         sha256=hashlib.sha256(encoded).hexdigest(),
+        session=session,
     )
 
 
@@ -312,14 +325,15 @@ def _append_artifact_record(
     byte_count: int,
     sha256: str,
     source_path: str = "",
+    session=None,
 ) -> None:
-    records_dir = _storage_root() / "records"
+    records_dir = _storage_root(session) / "records"
     records_dir.mkdir(parents=True, exist_ok=True)
     record = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "operation": operation,
         "session_id": session_id,
-        "path": _storage_relative(target),
+        "path": _storage_relative(target, session=session),
         "bytes": byte_count,
         "sha256": sha256,
     }
@@ -442,10 +456,10 @@ def run_publish_artifact(
             )
 
         published_path = destination_path if destination_path is not None else source_path
-        target = _safe_storage_path(_generated_storage_root(), published_path)
+        target = _safe_storage_path(_generated_storage_root(_session), published_path)
         if target.exists():
             raise FileExistsError(
-                f"Storage artifact already exists: {_storage_relative(target)}. "
+                f"Storage artifact already exists: {_storage_relative(target, session=_session)}. "
                 "Choose a new destination filename."
             )
 
@@ -469,12 +483,13 @@ def run_publish_artifact(
             source_path=source_path,
             byte_count=byte_count,
             sha256=digest.hexdigest(),
+            session=_session,
         )
         _touch_sandbox_scope(scope)
         return json.dumps({
             "status": "published",
             "source_path": source_path,
-            "path": _storage_relative(target),
+            "path": _storage_relative(target, session=_session),
             "bytes": byte_count,
         }, ensure_ascii=False)
     except Exception as e:
@@ -631,7 +646,9 @@ TASK_MEMORY_ROOT = (WORKDIR / ".task_sessions").resolve()
 def memory_store_for_session(session=None) -> MemoryStore:
     metadata = getattr(session, "metadata", {}) or {}
     if metadata.get("kind") not in {"task_session", "scheduled_agent"}:
-        return MEMORY
+        if explicit_user_id_for_session(session) is None:
+            return MEMORY
+        return MemoryStore(memory_root_for_session(WORKDIR, session))
 
     task_id = str(metadata.get("task_id", "")).strip()
     if not task_id:
@@ -663,8 +680,15 @@ MEMORY_HANDLERS = {
 }
 
 STORAGE_HANDLERS = {
-    "storage_list_files": lambda **kw: run_storage_list(kw.get("path", "")),
-    "storage_read_file": lambda **kw: run_storage_read(kw["path"], kw.get("limit")),
+    "storage_list_files": lambda **kw: run_storage_list(
+        kw.get("path", ""),
+        _session=kw.get("_session"),
+    ),
+    "storage_read_file": lambda **kw: run_storage_read(
+        kw["path"],
+        kw.get("limit"),
+        _session=kw.get("_session"),
+    ),
     "storage_write_file": lambda **kw: run_storage_write(
         kw["path"],
         kw["content"],

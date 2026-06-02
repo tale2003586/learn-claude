@@ -9,6 +9,7 @@
 启动后打开浏览器即可使用：
 
 - Web 聊天会话
+- 注册登录页：浏览器使用 Cookie 登录态，会话、长期记忆、文件区和分析记录按账号隔离
 - 助手消息支持安全 Markdown 展示，标题、列表和代码块可直接阅读
 - 工具请求和工具结果默认折叠，按需展开查看完整内容
 - 会话历史列表
@@ -45,8 +46,23 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com
 USE_LOCAL_PROXY=0
 WEB_USERNAME=agent
 WEB_PASSWORD=换成强密码
+WEB_ALLOW_REGISTRATION=1
+WEB_ALLOW_ANONYMOUS=0
+WEB_COOKIE_SECURE=0
 WEB_MAX_BODY_BYTES=52428800
 ```
+
+单账号配置会被视为管理员账号。多人使用时，改成：
+
+```bash
+WEB_USERS_JSON={"admin":{"password":"管理员强密码","role":"admin"},"guest":{"password":"普通用户强密码","role":"user"}}
+```
+
+`admin` 可以使用 Coding 模式和服务器级定时任务。`user` 账号只使用受限的
+Bot/Hybrid 能力，不会获得 `bash`、项目文件写入或服务器级定时任务权限。
+
+浏览器打开站点后会进入 `/login`。`.env` 中的账号可直接登录；开启
+`WEB_ALLOW_REGISTRATION=1` 后，其他用户也可以在页面注册普通账号。
 
 本地普通 Python 启动：
 
@@ -169,6 +185,10 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com
 USE_LOCAL_PROXY=0
 WEB_USERNAME=agent
 WEB_PASSWORD=一段很长的随机密码
+WEB_ALLOW_REGISTRATION=1
+WEB_ALLOW_ANONYMOUS=0
+WEB_SESSION_TTL_HOURS=168
+WEB_COOKIE_SECURE=0
 WEB_MAX_BODY_BYTES=52428800
 PYTHON_IMAGE=python:3.12-slim
 PIP_INDEX_URL=https://pypi.org/simple
@@ -183,7 +203,12 @@ TASK_SANDBOX_TTL_HOURS=168
 
 - `DEEPSEEK_API_KEY` 必填。
 - `USE_LOCAL_PROXY=0` 适合云服务器；本地开发如果要走代理，可以设为 `1`。
-- 设置 `WEB_PASSWORD` 后浏览器会弹登录框。云服务器一定要设置。
+- 浏览器使用 `/login` 页面登录，不再弹出浏览器原生认证框。
+- 多用户部署用 `WEB_USERS_JSON` 替代 `WEB_USERNAME` 和 `WEB_PASSWORD`。不要同时保留两套配置。
+- `WEB_ALLOW_REGISTRATION=1` 开放页面注册。公开部署不需要注册时设为 `0`。
+- `WEB_ALLOW_ANONYMOUS=0` 禁止绕过登录。云服务器保持为 `0`。
+- `WEB_SESSION_TTL_HOURS` 控制登录态时长，默认 `168` 小时。
+- Nginx 配置 HTTPS 后，把 `WEB_COOKIE_SECURE=1`，让浏览器只通过 HTTPS 发送 Cookie。
 - `WEB_MAX_BODY_BYTES` 控制单次上传大小，默认约 50 MB。
 - `PYTHON_IMAGE` 是 Docker 基础镜像。Docker Hub 访问超时时，可以临时换成你服务器可访问的 Python 3.12 slim 镜像源。
 - `PIP_INDEX_URL` 是 Python 依赖下载源。`files.pythonhosted.org` 超时时，可以改成你服务器可访问的 PyPI mirror。
@@ -239,6 +264,27 @@ curl -u agent:你的密码 http://127.0.0.1:8000/api/runtime-health
 ./.tasks         task 数据
 ./.team          team inbox
 ./.transcripts   transcript
+./.users         多用户私有数据，每个账号拥有独立 storage/ 和 memory/
+```
+
+`.users/auth.db` 保存注册账号和浏览器登录会话。密码以 PBKDF2 哈希保存，不会明文写入数据库。
+
+多用户私有目录结构：
+
+```text
+.users/<user-id>/storage
+.users/<user-id>/memory
+```
+
+升级到多用户版本后，旧的 `storage/` 和 `memory/` 不会自动暴露给任意 Web
+账号。需要迁移旧数据时，先停止容器，再手工复制给指定管理员：
+
+```bash
+docker compose down
+mkdir -p .users/admin/storage .users/admin/memory
+cp -a storage/. .users/admin/storage/
+cp -a memory/. .users/admin/memory/
+docker compose up -d --build
 ```
 
 升级镜像或重启容器不会丢这些数据。
@@ -479,13 +525,19 @@ USE_LOCAL_PROXY=0
 
 ### 8.4 没登录或登录失败
 
-设置了 `WEB_PASSWORD` 后，本地 curl 要带账号密码：
+浏览器访问站点会自动跳到：
+
+```text
+/login
+```
+
+命令行排查仍可用兼容的 Basic Auth：
 
 ```bash
 curl -u agent:你的密码 http://127.0.0.1:8000/api/health
 ```
 
-如果浏览器反复弹登录框，检查 `.env`：
+如果页面登录失败，检查 `.env`：
 
 ```bash
 WEB_USERNAME=agent

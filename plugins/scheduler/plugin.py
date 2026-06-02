@@ -520,6 +520,7 @@ class SchedulerPlugin(Plugin):
             risk="low",
             enabled_modes={"bot", "coding"},
             always_on=True,
+            admin_only=True,
             source="plugin:scheduler",
         )
 

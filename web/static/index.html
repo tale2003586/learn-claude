@@ -106,10 +106,17 @@
                 <span>记忆文件</span>
                 <strong id="memoryCountMetric">0</strong>
               </div>
+              <div class="activity-item">
+                <span>当前账号</span>
+                <strong id="currentUserMetric">local</strong>
+              </div>
             </div>
             <div class="workspace-card">
               <span>Workspace</span>
               <p id="workspacePath">-</p>
+            </div>
+            <div class="account-actions">
+              <button id="logoutBtn" class="text-button" type="button">退出登录</button>
             </div>
           </section>
         </div>
@@ -130,7 +137,7 @@
               <span class="mode-caption">Mode</span>
               <button data-command="/hybrid" type="button">Hybrid</button>
               <button data-command="/chat" type="button">Chat</button>
-              <button data-command="/coding" type="button">Coding</button>
+              <button data-command="/coding" data-required-role="admin" type="button">Coding</button>
             </div>
           </header>
 

@@ -13,9 +13,11 @@ import sys
 import threading
 import traceback
 import warnings
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from html import escape as html_escape
 from http import HTTPStatus
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
@@ -29,10 +31,7 @@ with warnings.catch_warnings():
 ROOT = Path(__file__).resolve().parents[1]
 STATIC_DIR = ROOT / "web" / "static"
 SESSIONS_DB = ROOT / ".sessions" / "sessions.db"
-MEMORY_DIR = ROOT / "memory"
-STORAGE_DIR = ROOT / "storage"
-RECORDS_DIR = STORAGE_DIR / "records"
-ANALYSIS_RECORD_PATH = RECORDS_DIR / "analysis.txt"
+USERS_DIR = ROOT / ".users"
 MEMORY_FILES = [
     "SELF.md",
     "MEMORY.md",
@@ -43,11 +42,24 @@ MEMORY_FILES = [
 ]
 DEFAULT_MAX_BODY_BYTES = 52_428_800
 MAX_PREVIEW_BYTES = 1_000_000
-AUTH_REALM = "taleclaw"
+AUTH_COOKIE_NAME = "taleclaw_session"
 _CHAT_MARKDOWN = None
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from user_scope import (
+    DEFAULT_USER_ID,
+    DEFAULT_USER_ROLE,
+    memory_root_for_user,
+    normalize_user_id,
+    normalize_user_role,
+    parse_web_session_id,
+    storage_root_for_user,
+    web_chat_id,
+    web_session_id,
+)
+from web.auth_store import AuthenticatedUser, EnvironmentUser, WebAuthStore
 
 
 def load_env_file(path: Path) -> None:
@@ -65,8 +77,7 @@ def load_env_file(path: Path) -> None:
 
 load_env_file(ROOT / ".env")
 MAX_BODY_BYTES = int(os.environ.get("WEB_MAX_BODY_BYTES", str(DEFAULT_MAX_BODY_BYTES)))
-STORAGE_DIR.mkdir(parents=True, exist_ok=True)
-RECORDS_DIR.mkdir(parents=True, exist_ok=True)
+USERS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class AgentService:
@@ -101,10 +112,20 @@ class AgentService:
         if self._start_error is not None:
             raise RuntimeError(_friendly_runtime_error(self._start_error)) from self._start_error
 
-    def ask(self, *, session_id: str, content: str, timeout: int = 180) -> str:
+    def ask(
+        self,
+        *,
+        session_id: str,
+        content: str,
+        user_id: str = DEFAULT_USER_ID,
+        user_role: str = DEFAULT_USER_ROLE,
+        timeout: int = 180,
+    ) -> str:
         return self.ask_stream(
             session_id=session_id,
             content=content,
+            user_id=user_id,
+            user_role=user_role,
             timeout=timeout,
         )
 
@@ -113,6 +134,8 @@ class AgentService:
         *,
         session_id: str,
         content: str,
+        user_id: str = DEFAULT_USER_ID,
+        user_role: str = DEFAULT_USER_ROLE,
         on_text: Callable[[str], None] | None = None,
         timeout: int = 180,
     ) -> str:
@@ -124,6 +147,8 @@ class AgentService:
             self._ask_async(
                 session_id=session_id,
                 content=content,
+                user_id=user_id,
+                user_role=user_role,
                 on_text=on_text,
             ),
             self._loop,
@@ -193,6 +218,8 @@ class AgentService:
         *,
         session_id: str,
         content: str,
+        user_id: str,
+        user_role: str,
         on_text: Callable[[str], None] | None = None,
     ) -> str:
         if self._runtime is None or self._turn_lock is None or self._loop is None:
@@ -200,17 +227,22 @@ class AgentService:
 
         async with self._turn_lock:
             reply_future: asyncio.Future[str] = self._loop.create_future()
-            self._pending[session_id] = reply_future
+            scoped_chat_id = web_chat_id(user_id, session_id)
+            self._pending[scoped_chat_id] = reply_future
             try:
                 await self._runtime.submit_user_message(
                     content=content,
                     channel="web",
-                    chat_id=session_id,
+                    chat_id=scoped_chat_id,
+                    metadata={
+                        "user_id": normalize_user_id(user_id),
+                        "user_role": normalize_user_role(user_role),
+                    },
                 )
                 await self._runtime.run_once(on_text=on_text)
                 return await asyncio.wait_for(reply_future, timeout=10)
             finally:
-                self._pending.pop(session_id, None)
+                self._pending.pop(scoped_chat_id, None)
 
     async def _delete_session_async(self, session_id: str) -> bool:
         if self._runtime is None or self._turn_lock is None:
@@ -231,7 +263,7 @@ def _friendly_runtime_error(exc: BaseException) -> str:
     return "".join(traceback.format_exception_only(type(exc), exc)).strip()
 
 
-def read_sessions() -> list[dict[str, Any]]:
+def read_sessions(user_id: str = DEFAULT_USER_ID) -> list[dict[str, Any]]:
     from sessions.session_store import SessionStore
 
     store = SessionStore(SESSIONS_DB)
@@ -244,12 +276,15 @@ def read_sessions() -> list[dict[str, Any]]:
     for row in rows:
         if _is_internal_task_session(row):
             continue
-        channel, _, chat_id = row["id"].partition(":")
+        parsed = parse_web_session_id(row["id"])
+        if parsed is None or parsed[0] != user_id:
+            continue
+        _, chat_id = parsed
         sessions.append({
             **row,
-            "channel": channel if chat_id else "",
-            "chat_id": chat_id if chat_id else row["id"],
-            "can_chat": channel == "web" and bool(chat_id),
+            "channel": "web",
+            "chat_id": chat_id,
+            "can_chat": True,
         })
     return sessions
 
@@ -264,17 +299,20 @@ def _delete_stored_session(session_id: str) -> bool:
         store.close()
 
 
-def _web_storage_id(session_id: str) -> str:
+def _web_storage_id(session_id: str, user_id: str = DEFAULT_USER_ID) -> str:
     value = str(session_id or "").strip()
     if not value:
         raise ValueError("session_id is required")
 
-    channel, separator, chat_id = value.partition(":")
-    if separator:
-        if channel != "web" or not chat_id:
-            raise ValueError("Only Web sessions can be deleted.")
+    parsed = parse_web_session_id(value)
+    if parsed is not None:
+        stored_user_id, chat_id = parsed
+        if stored_user_id != user_id:
+            raise ValueError("Session does not belong to the current user.")
         return value
-    return f"web:{value}"
+    if ":" in value:
+        raise ValueError("Only Web sessions owned by the current user can be accessed.")
+    return web_session_id(user_id, value)
 
 
 def _is_internal_task_session(row: dict[str, Any]) -> bool:
@@ -282,10 +320,15 @@ def _is_internal_task_session(row: dict[str, Any]) -> bool:
     return row.get("id", "").startswith("task:") or metadata.get("kind") == "task_session"
 
 
-def read_session(session_id: str, *, raw: bool = False) -> dict[str, Any]:
+def read_session(
+    session_id: str,
+    *,
+    user_id: str = DEFAULT_USER_ID,
+    raw: bool = False,
+) -> dict[str, Any]:
     from sessions.session_store import SessionStore
 
-    storage_id = session_id if raw or ":" in session_id else f"web:{session_id}"
+    storage_id = _web_storage_id(session_id, user_id)
     store = SessionStore(SESSIONS_DB)
     try:
         session = store.load_session(storage_id)
@@ -293,19 +336,19 @@ def read_session(session_id: str, *, raw: bool = False) -> dict[str, Any]:
         store.close()
 
     if session is None:
-        channel, _, chat_id = storage_id.partition(":")
+        _, chat_id = parse_web_session_id(storage_id) or (user_id, session_id)
         return {
             "id": storage_id,
-            "chat_id": chat_id if chat_id else session_id,
-            "channel": channel if chat_id else "",
-            "can_chat": channel == "web" and bool(chat_id),
+            "chat_id": chat_id,
+            "channel": "web",
+            "can_chat": True,
             "messages": [],
             "current_mode": "hybrid",
         }
-    channel, _, chat_id = session["id"].partition(":")
-    session["channel"] = channel if chat_id else ""
-    session["chat_id"] = chat_id if chat_id else session["id"]
-    session["can_chat"] = channel == "web" and bool(chat_id)
+    _, chat_id = parse_web_session_id(session["id"]) or (user_id, session_id)
+    session["channel"] = "web"
+    session["chat_id"] = chat_id
+    session["can_chat"] = True
     session["messages"] = [_web_message(message) for message in session["messages"]]
     return session
 
@@ -342,10 +385,11 @@ def render_chat_markdown(text: str) -> str:
     return _CHAT_MARKDOWN(text)
 
 
-def read_memory_files() -> list[dict[str, str]]:
+def read_memory_files(user_id: str = DEFAULT_USER_ID) -> list[dict[str, str]]:
+    memory_dir = memory_root_for_user(ROOT, user_id)
     files = []
     for name in MEMORY_FILES:
-        path = MEMORY_DIR / name
+        path = memory_dir / name
         if path.exists():
             content = path.read_text(encoding="utf-8")
         else:
@@ -358,27 +402,43 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _safe_storage_path(relative_path: str | None = "") -> Path:
+def _storage_dir(user_id: str) -> Path:
+    root = storage_root_for_user(ROOT, user_id).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _analysis_record_path(user_id: str) -> Path:
+    return _storage_dir(user_id) / "records" / "analysis.txt"
+
+
+def _safe_storage_path(
+    relative_path: str | None = "",
+    *,
+    user_id: str = DEFAULT_USER_ID,
+) -> Path:
+    storage_dir = _storage_dir(user_id)
     raw = unquote(str(relative_path or "")).strip().lstrip("/")
-    candidate = (STORAGE_DIR / raw).resolve()
-    if candidate != STORAGE_DIR and not candidate.is_relative_to(STORAGE_DIR):
+    candidate = (storage_dir / raw).resolve()
+    if candidate != storage_dir and not candidate.is_relative_to(storage_dir):
         raise ValueError("Path escapes storage.")
     return candidate
 
 
-def _storage_rel(path: Path) -> str:
-    if path == STORAGE_DIR:
+def _storage_rel(path: Path, *, user_id: str = DEFAULT_USER_ID) -> str:
+    storage_dir = _storage_dir(user_id)
+    if path == storage_dir:
         return ""
-    return path.relative_to(STORAGE_DIR).as_posix()
+    return path.relative_to(storage_dir).as_posix()
 
 
-def _entry_for(path: Path) -> dict[str, Any]:
+def _entry_for(path: Path, *, user_id: str = DEFAULT_USER_ID) -> dict[str, Any]:
     stat = path.stat()
     mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     is_dir = path.is_dir()
     return {
         "name": path.name,
-        "path": _storage_rel(path),
+        "path": _storage_rel(path, user_id=user_id),
         "is_dir": is_dir,
         "size": 0 if is_dir else stat.st_size,
         "modified": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
@@ -401,27 +461,45 @@ def _is_previewable(path: Path, mime: str) -> bool:
     }
 
 
-def list_storage(relative_path: str | None = "") -> dict[str, Any]:
-    current = _safe_storage_path(relative_path)
+def list_storage(
+    relative_path: str | None = "",
+    *,
+    user_id: str = DEFAULT_USER_ID,
+) -> dict[str, Any]:
+    storage_dir = _storage_dir(user_id)
+    current = _safe_storage_path(relative_path, user_id=user_id)
     if not current.exists():
         raise FileNotFoundError("Path not found.")
     if not current.is_dir():
         raise NotADirectoryError("Path is not a directory.")
-    entries = [_entry_for(path) for path in current.iterdir() if not path.name.startswith(".")]
+    entries = []
+    for path in current.iterdir():
+        if path.name.startswith(".") or path.is_symlink():
+            continue
+        resolved = path.resolve()
+        if resolved != storage_dir and not resolved.is_relative_to(storage_dir):
+            continue
+        entries.append(_entry_for(path, user_id=user_id))
     entries.sort(key=lambda item: (not item["is_dir"], item["name"].lower()))
     parent = ""
-    if current != STORAGE_DIR:
-        parent = _storage_rel(current.parent)
+    if current != storage_dir:
+        parent = _storage_rel(current.parent, user_id=user_id)
     return {
-        "path": _storage_rel(current),
+        "path": _storage_rel(current, user_id=user_id),
         "parent": parent,
         "entries": entries,
-        "record_path": _storage_rel(ANALYSIS_RECORD_PATH),
+        "record_path": _storage_rel(_analysis_record_path(user_id), user_id=user_id),
     }
 
 
-def append_analysis_record(*, user_text: str, assistant_text: str) -> str:
-    RECORDS_DIR.mkdir(parents=True, exist_ok=True)
+def append_analysis_record(
+    *,
+    user_text: str,
+    assistant_text: str,
+    user_id: str = DEFAULT_USER_ID,
+) -> str:
+    analysis_record_path = _analysis_record_path(user_id)
+    analysis_record_path.parent.mkdir(parents=True, exist_ok=True)
     entry = (
         f"\n## {_now_iso()}\n\n"
         "USER:\n"
@@ -429,20 +507,106 @@ def append_analysis_record(*, user_text: str, assistant_text: str) -> str:
         "AI:\n"
         f"{assistant_text.strip()}\n"
     )
-    with ANALYSIS_RECORD_PATH.open("a", encoding="utf-8") as handle:
+    with analysis_record_path.open("a", encoding="utf-8") as handle:
         handle.write(entry)
-    return _storage_rel(ANALYSIS_RECORD_PATH)
+    return _storage_rel(analysis_record_path, user_id=user_id)
+
+
+@dataclass(frozen=True)
+class ConfiguredAuthUser:
+    user_id: str
+    password: str
+    role: str = "user"
+
+
+def auth_users() -> dict[str, ConfiguredAuthUser]:
+    raw_users = os.environ.get("WEB_USERS_JSON", "").strip()
+    if raw_users:
+        payload = json.loads(raw_users)
+        if not isinstance(payload, dict):
+            raise ValueError("WEB_USERS_JSON must be a JSON object.")
+        users = {}
+        for raw_user_id, raw_config in payload.items():
+            user_id = normalize_user_id(raw_user_id)
+            if isinstance(raw_config, str):
+                password = raw_config
+                role = "user"
+            elif isinstance(raw_config, dict):
+                password = str(raw_config.get("password", ""))
+                role = normalize_user_role(raw_config.get("role", "user"))
+            else:
+                raise ValueError(f"Invalid WEB_USERS_JSON entry for {user_id}.")
+            if not password:
+                raise ValueError(f"Missing password for WEB_USERS_JSON user: {user_id}")
+            users[user_id] = ConfiguredAuthUser(user_id=user_id, password=password, role=role)
+        if not users:
+            raise ValueError("WEB_USERS_JSON must contain at least one user.")
+        return users
+
+    password = os.environ.get("WEB_PASSWORD", "")
+    if not password:
+        return {}
+    user_id = normalize_user_id(os.environ.get("WEB_USERNAME", "agent"))
+    return {
+        user_id: ConfiguredAuthUser(
+            user_id=user_id,
+            password=password,
+            role="admin",
+        )
+    }
 
 
 def auth_credentials() -> tuple[str, str] | None:
-    password = os.environ.get("WEB_PASSWORD", "")
-    if not password:
+    """Backward-compatible view for callers that still expect one credential."""
+    users = auth_users()
+    if not users:
         return None
-    return os.environ.get("WEB_USERNAME", "agent"), password
+    first = next(iter(users.values()))
+    return first.user_id, first.password
+
+
+def web_auth_store() -> WebAuthStore:
+    return WebAuthStore(ROOT / ".users" / "auth.db")
+
+
+def sync_environment_auth_users(store: WebAuthStore) -> None:
+    store.sync_environment_users({
+        user_id: EnvironmentUser(
+            user_id=user.user_id,
+            password=user.password,
+            role=user.role,
+        )
+        for user_id, user in auth_users().items()
+    })
+
+
+def registration_enabled() -> bool:
+    return _env_flag("WEB_ALLOW_REGISTRATION", default=False)
+
+
+def anonymous_access_enabled() -> bool:
+    return _env_flag("WEB_ALLOW_ANONYMOUS", default=False)
+
+
+def auth_cookie_secure() -> bool:
+    return _env_flag("WEB_COOKIE_SECURE", default=False)
+
+
+def auth_session_ttl_hours() -> int:
+    try:
+        return max(1, int(os.environ.get("WEB_SESSION_TTL_HOURS", "168")))
+    except ValueError:
+        return 168
+
+
+def _env_flag(name: str, *, default: bool) -> bool:
+    fallback = "1" if default else "0"
+    return os.environ.get(name, fallback).strip().lower() in {"1", "true", "yes", "on"}
 
 
 class RequestHandler(BaseHTTPRequestHandler):
     agent_service: AgentService
+    auth_user: AuthenticatedUser
 
     server_version = "taleclaw/0.1"
 
@@ -452,14 +616,32 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path == "/login":
+            self._send_static("/login.html")
+            return
+        if parsed.path.startswith("/static/"):
+            self._send_static(parsed.path)
+            return
+        if parsed.path == "/api/auth/config":
+            self._send_json({
+                "registration_enabled": registration_enabled(),
+            })
+            return
+
         if not self._authorize():
             return
 
-        parsed = urlparse(self.path)
+        if parsed.path == "/api/auth/me":
+            self._send_json({"user": self._public_user(self._current_user())})
+            return
+
         if parsed.path == "/api/health":
+            user = self._current_user()
             self._send_json({
                 "ok": True,
-                "workspace": str(ROOT),
+                "workspace": str(ROOT) if user.role == "admin" else "private workspace",
+                "user": {"id": user.user_id, "role": user.role},
                 "runtime": "lazy",
                 "has_env_file": (ROOT / ".env").exists(),
                 "has_deepseek_key": bool(os.environ.get("DEEPSEEK_API_KEY")),
@@ -488,25 +670,31 @@ class RequestHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/api/sessions":
-            self._send_json({"sessions": read_sessions()})
+            self._send_json({"sessions": read_sessions(self._current_user().user_id)})
             return
 
         if parsed.path == "/api/session":
             params = parse_qs(parsed.query)
             session_id = params.get("session_id", ["default"])[0]
-            raw = params.get("raw", ["0"])[0] == "1"
-            self._send_json({"session": read_session(session_id, raw=raw)})
+            self._send_json({
+                "session": read_session(
+                    session_id,
+                    user_id=self._current_user().user_id,
+                )
+            })
             return
 
         if parsed.path == "/api/memory":
-            self._send_json({"files": read_memory_files()})
+            self._send_json({"files": read_memory_files(self._current_user().user_id)})
             return
 
         if parsed.path == "/api/files":
             params = parse_qs(parsed.query)
             path = params.get("path", [""])[0]
             try:
-                self._send_json({"files": list_storage(path)})
+                self._send_json({
+                    "files": list_storage(path, user_id=self._current_user().user_id)
+                })
             except Exception as exc:
                 self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             return
@@ -522,10 +710,20 @@ class RequestHandler(BaseHTTPRequestHandler):
         self._send_static(parsed.path)
 
     def do_POST(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/auth/login":
+            self._handle_auth_login()
+            return
+        if parsed.path == "/api/auth/register":
+            self._handle_auth_register()
+            return
+        if parsed.path == "/api/auth/logout":
+            self._handle_auth_logout()
+            return
+
         if not self._authorize():
             return
 
-        parsed = urlparse(self.path)
         if parsed.path == "/api/chat":
             self._handle_chat()
             return
@@ -572,15 +770,21 @@ class RequestHandler(BaseHTTPRequestHandler):
             payload = self._read_json_body()
             message = str(payload.get("message", "")).strip()
             session_id = str(payload.get("session_id", "default")).strip() or "default"
+            user = self._current_user()
             if not message:
                 self._send_json({"error": "message is required"}, status=HTTPStatus.BAD_REQUEST)
                 return
 
-            reply = self.agent_service.ask(session_id=session_id, content=message)
+            reply = self.agent_service.ask(
+                session_id=session_id,
+                content=message,
+                user_id=user.user_id,
+                user_role=user.role,
+            )
             self._send_json({
                 "reply": reply,
                 "session_id": session_id,
-                "session": read_session(session_id),
+                "session": read_session(session_id, user_id=user.user_id),
             })
         except Exception as exc:
             traceback.print_exc()
@@ -592,17 +796,80 @@ class RequestHandler(BaseHTTPRequestHandler):
                 status=HTTPStatus.SERVICE_UNAVAILABLE,
             )
 
+    def _handle_auth_login(self) -> None:
+        try:
+            payload = self._read_json_body()
+            store = web_auth_store()
+            sync_environment_auth_users(store)
+            user = store.authenticate(
+                user_id=str(payload.get("username", "")),
+                password=str(payload.get("password", "")),
+            )
+            if user is None:
+                self._send_json(
+                    {"error": "用户名或密码错误。"},
+                    status=HTTPStatus.UNAUTHORIZED,
+                )
+                return
+            token = store.create_session(user, ttl_hours=auth_session_ttl_hours())
+            self._send_json(
+                {"ok": True, "user": self._public_user(user)},
+                headers={"Set-Cookie": self._auth_cookie(token)},
+            )
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+        except Exception as exc:
+            traceback.print_exc()
+            self._send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _handle_auth_register(self) -> None:
+        if not registration_enabled():
+            self._send_json(
+                {"error": "当前未开放注册。"},
+                status=HTTPStatus.FORBIDDEN,
+            )
+            return
+        try:
+            payload = self._read_json_body()
+            store = web_auth_store()
+            sync_environment_auth_users(store)
+            user = store.register(
+                user_id=str(payload.get("username", "")),
+                password=str(payload.get("password", "")),
+            )
+            token = store.create_session(user, ttl_hours=auth_session_ttl_hours())
+            self._send_json(
+                {"ok": True, "user": self._public_user(user)},
+                status=HTTPStatus.CREATED,
+                headers={"Set-Cookie": self._auth_cookie(token)},
+            )
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+        except Exception as exc:
+            traceback.print_exc()
+            self._send_json({"error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _handle_auth_logout(self) -> None:
+        try:
+            web_auth_store().revoke_session(self._request_cookie_token())
+        finally:
+            self._send_json(
+                {"ok": True},
+                headers={"Set-Cookie": self._expired_auth_cookie()},
+            )
+
     def _handle_session_delete(self) -> None:
         try:
             payload = self._read_json_body()
-            storage_id = _web_storage_id(payload.get("session_id", ""))
+            user_id = self._current_user().user_id
+            storage_id = _web_storage_id(payload.get("session_id", ""), user_id)
             if not self.agent_service.delete_session(storage_id):
                 self._send_json({"error": "Session not found"}, status=HTTPStatus.NOT_FOUND)
                 return
             self._send_json({
                 "deleted": True,
-                "session_id": storage_id.removeprefix("web:"),
-                "sessions": read_sessions(),
+                "session_id": parse_web_session_id(storage_id)[1],
+                "sessions": read_sessions(user_id),
             })
         except ValueError as exc:
             self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
@@ -621,6 +888,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             payload = self._read_json_body()
             message = str(payload.get("message", "")).strip()
             session_id = str(payload.get("session_id", "default")).strip() or "default"
+            user = self._current_user()
             if not message:
                 self._send_json({"error": "message is required"}, status=HTTPStatus.BAD_REQUEST)
                 return
@@ -638,13 +906,15 @@ class RequestHandler(BaseHTTPRequestHandler):
                 reply = self.agent_service.ask_stream(
                     session_id=session_id,
                     content=message,
+                    user_id=user.user_id,
+                    user_role=user.role,
                     on_text=lambda text: events.put({"type": "delta", "text": text}),
                 )
                 events.put({
                     "type": "complete",
                     "reply": reply,
                     "session_id": session_id,
-                    "session": read_session(session_id),
+                    "session": read_session(session_id, user_id=user.user_id),
                 })
             except Exception as exc:
                 traceback.print_exc()
@@ -676,6 +946,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             payload = self._read_json_body()
             text = str(payload.get("text", "")).strip()
             session_id = str(payload.get("session_id", "analysis")).strip() or "analysis"
+            user = self._current_user()
             if not text:
                 self._send_json({"error": "text is required"}, status=HTTPStatus.BAD_REQUEST)
                 return
@@ -684,8 +955,17 @@ class RequestHandler(BaseHTTPRequestHandler):
                 "请保留关键事实、判断可能的问题，并给出可执行建议。\n\n"
                 f"{text}"
             )
-            reply = self.agent_service.ask(session_id=session_id, content=prompt)
-            record_path = append_analysis_record(user_text=text, assistant_text=reply)
+            reply = self.agent_service.ask(
+                session_id=session_id,
+                content=prompt,
+                user_id=user.user_id,
+                user_role=user.role,
+            )
+            record_path = append_analysis_record(
+                user_text=text,
+                assistant_text=reply,
+                user_id=user.user_id,
+            )
             self._send_json({
                 "reply": reply,
                 "record_path": record_path,
@@ -703,8 +983,9 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def _handle_file_preview(self, parsed) -> None:
         try:
+            user_id = self._current_user().user_id
             params = parse_qs(parsed.query)
-            path = _safe_storage_path(params.get("path", [""])[0])
+            path = _safe_storage_path(params.get("path", [""])[0], user_id=user_id)
             if not path.exists() or not path.is_file():
                 self._send_json({"error": "File not found"}, status=HTTPStatus.NOT_FOUND)
                 return
@@ -717,7 +998,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
             self._send_json({
                 "name": path.name,
-                "path": _storage_rel(path),
+                "path": _storage_rel(path, user_id=user_id),
                 "content": path.read_text(encoding="utf-8", errors="replace"),
                 "mime": mime,
             })
@@ -726,8 +1007,9 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def _handle_file_download(self, parsed) -> None:
         try:
+            user_id = self._current_user().user_id
             params = parse_qs(parsed.query)
-            path = _safe_storage_path(params.get("path", [""])[0])
+            path = _safe_storage_path(params.get("path", [""])[0], user_id=user_id)
             if not path.exists() or not path.is_file():
                 self._send_json({"error": "File not found"}, status=HTTPStatus.NOT_FOUND)
                 return
@@ -745,6 +1027,8 @@ class RequestHandler(BaseHTTPRequestHandler):
 
     def _handle_file_upload(self) -> None:
         try:
+            user_id = self._current_user().user_id
+            storage_dir = _storage_dir(user_id)
             try:
                 length = int(self.headers.get("Content-Length", "0"))
             except ValueError:
@@ -761,7 +1045,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "CONTENT_LENGTH": str(length),
                 },
             )
-            target_dir = _safe_storage_path(form.getfirst("path", ""))
+            target_dir = _safe_storage_path(form.getfirst("path", ""), user_id=user_id)
             target_dir.mkdir(parents=True, exist_ok=True)
             if not target_dir.is_dir():
                 self._send_json({"error": "Target path is not a directory"}, status=HTTPStatus.BAD_REQUEST)
@@ -775,57 +1059,79 @@ class RequestHandler(BaseHTTPRequestHandler):
                     continue
                 filename = Path(item.filename).name
                 dest = (target_dir / filename).resolve()
-                if dest != STORAGE_DIR and not dest.is_relative_to(STORAGE_DIR):
+                if dest != storage_dir and not dest.is_relative_to(storage_dir):
                     raise ValueError("Path escapes storage.")
                 with dest.open("wb") as handle:
                     shutil.copyfileobj(item.file, handle)
-                saved.append(_entry_for(dest))
-            self._send_json({"saved": saved, "files": list_storage(_storage_rel(target_dir))})
+                saved.append(_entry_for(dest, user_id=user_id))
+            self._send_json({
+                "saved": saved,
+                "files": list_storage(
+                    _storage_rel(target_dir, user_id=user_id),
+                    user_id=user_id,
+                ),
+            })
         except Exception as exc:
             self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
 
     def _handle_mkdir(self) -> None:
         try:
+            user_id = self._current_user().user_id
+            storage_dir = _storage_dir(user_id)
             payload = self._read_json_body()
-            parent = _safe_storage_path(payload.get("path", ""))
+            parent = _safe_storage_path(payload.get("path", ""), user_id=user_id)
             name = Path(str(payload.get("name", "")).strip()).name
             if not name:
                 self._send_json({"error": "name is required"}, status=HTTPStatus.BAD_REQUEST)
                 return
             target = (parent / name).resolve()
-            if target != STORAGE_DIR and not target.is_relative_to(STORAGE_DIR):
+            if target != storage_dir and not target.is_relative_to(storage_dir):
                 raise ValueError("Path escapes storage.")
             target.mkdir(parents=True, exist_ok=True)
-            self._send_json({"files": list_storage(_storage_rel(parent))})
+            self._send_json({
+                "files": list_storage(
+                    _storage_rel(parent, user_id=user_id),
+                    user_id=user_id,
+                )
+            })
         except Exception as exc:
             self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
 
     def _handle_rename(self) -> None:
         try:
+            user_id = self._current_user().user_id
+            storage_dir = _storage_dir(user_id)
             payload = self._read_json_body()
-            source = _safe_storage_path(payload.get("path", ""))
+            source = _safe_storage_path(payload.get("path", ""), user_id=user_id)
             name = Path(str(payload.get("name", "")).strip()).name
             if not name:
                 self._send_json({"error": "name is required"}, status=HTTPStatus.BAD_REQUEST)
                 return
-            if source == STORAGE_DIR:
+            if source == storage_dir:
                 self._send_json({"error": "Cannot rename storage root"}, status=HTTPStatus.BAD_REQUEST)
                 return
             target = (source.parent / name).resolve()
-            if target != STORAGE_DIR and not target.is_relative_to(STORAGE_DIR):
+            if target != storage_dir and not target.is_relative_to(storage_dir):
                 raise ValueError("Path escapes storage.")
             if target.exists():
                 raise FileExistsError("Target already exists.")
             source.rename(target)
-            self._send_json({"files": list_storage(_storage_rel(target.parent))})
+            self._send_json({
+                "files": list_storage(
+                    _storage_rel(target.parent, user_id=user_id),
+                    user_id=user_id,
+                )
+            })
         except Exception as exc:
             self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
 
     def _handle_delete(self) -> None:
         try:
+            user_id = self._current_user().user_id
+            storage_dir = _storage_dir(user_id)
             payload = self._read_json_body()
-            target = _safe_storage_path(payload.get("path", ""))
-            if target == STORAGE_DIR:
+            target = _safe_storage_path(payload.get("path", ""), user_id=user_id)
+            if target == storage_dir:
                 self._send_json({"error": "Cannot delete storage root"}, status=HTTPStatus.BAD_REQUEST)
                 return
             parent = target.parent
@@ -833,7 +1139,12 @@ class RequestHandler(BaseHTTPRequestHandler):
                 shutil.rmtree(target)
             elif target.exists():
                 target.unlink()
-            self._send_json({"files": list_storage(_storage_rel(parent))})
+            self._send_json({
+                "files": list_storage(
+                    _storage_rel(parent, user_id=user_id),
+                    user_id=user_id,
+                )
+            })
         except Exception as exc:
             self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
 
@@ -849,12 +1160,20 @@ class RequestHandler(BaseHTTPRequestHandler):
             return {}
         return json.loads(raw.decode("utf-8"))
 
-    def _send_json(self, payload: dict[str, Any], *, status: HTTPStatus = HTTPStatus.OK) -> None:
+    def _send_json(
+        self,
+        payload: dict[str, Any],
+        *,
+        status: HTTPStatus = HTTPStatus.OK,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         body = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
         self.send_response(status)
         self._send_cors_headers()
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -904,10 +1223,12 @@ class RequestHandler(BaseHTTPRequestHandler):
         return None
 
     def _authorize(self) -> bool:
-        credentials = auth_credentials()
-        if credentials is None:
+        cookie_user = web_auth_store().authenticate_session(self._request_cookie_token())
+        if cookie_user is not None:
+            self.auth_user = cookie_user
             return True
 
+        users = auth_users()
         header = self.headers.get("Authorization", "")
         scheme, _, token = header.partition(" ")
         if scheme.lower() == "basic" and token:
@@ -916,21 +1237,87 @@ class RequestHandler(BaseHTTPRequestHandler):
             except Exception:
                 decoded = ""
             username, _, password = decoded.partition(":")
-            expected_username, expected_password = credentials
+            user = users.get(username)
             if (
-                hmac.compare_digest(username, expected_username)
-                and hmac.compare_digest(password, expected_password)
+                user is not None
+                and hmac.compare_digest(password, user.password)
             ):
+                self.auth_user = AuthenticatedUser(
+                    user_id=user.user_id,
+                    role=user.role,
+                )
                 return True
 
+        if anonymous_access_enabled():
+            self.auth_user = AuthenticatedUser(
+                user_id=DEFAULT_USER_ID,
+                role=DEFAULT_USER_ROLE,
+            )
+            return True
+
         body = json.dumps({"error": "Authentication required"}, ensure_ascii=False).encode("utf-8")
-        self.send_response(HTTPStatus.UNAUTHORIZED)
-        self.send_header("WWW-Authenticate", f'Basic realm="{AUTH_REALM}", charset="UTF-8"')
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        parsed = urlparse(self.path)
+        if not parsed.path.startswith("/api/"):
+            self._redirect("/login")
+        else:
+            self.send_response(HTTPStatus.UNAUTHORIZED)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         return False
+
+    def _current_user(self) -> AuthenticatedUser:
+        return getattr(
+            self,
+            "auth_user",
+            AuthenticatedUser(
+                user_id=DEFAULT_USER_ID,
+                role=DEFAULT_USER_ROLE,
+            ),
+        )
+
+    def _request_cookie_token(self) -> str:
+        cookie = SimpleCookie()
+        try:
+            cookie.load(self.headers.get("Cookie", ""))
+        except Exception:
+            return ""
+        morsel = cookie.get(AUTH_COOKIE_NAME)
+        return morsel.value if morsel is not None else ""
+
+    def _auth_cookie(self, token: str) -> str:
+        parts = [
+            f"{AUTH_COOKIE_NAME}={token}",
+            "Path=/",
+            "HttpOnly",
+            "SameSite=Lax",
+            f"Max-Age={auth_session_ttl_hours() * 3600}",
+        ]
+        if auth_cookie_secure():
+            parts.append("Secure")
+        return "; ".join(parts)
+
+    def _expired_auth_cookie(self) -> str:
+        parts = [
+            f"{AUTH_COOKIE_NAME}=",
+            "Path=/",
+            "HttpOnly",
+            "SameSite=Lax",
+            "Max-Age=0",
+        ]
+        if auth_cookie_secure():
+            parts.append("Secure")
+        return "; ".join(parts)
+
+    def _public_user(self, user: AuthenticatedUser) -> dict[str, str]:
+        return {"id": user.user_id, "role": user.role}
+
+    def _redirect(self, location: str) -> None:
+        self.send_response(HTTPStatus.SEE_OTHER)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def _send_cors_headers(self) -> None:
         self.send_header("Access-Control-Allow-Origin", "*")

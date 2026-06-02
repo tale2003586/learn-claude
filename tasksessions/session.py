@@ -33,6 +33,8 @@ class TaskSessionFactory:
         parent_session_id: str,
         task_type: str,
         user_request: str,
+        user_id: str | None = None,
+        user_role: str | None = None,
     ) -> TaskSessionRecord:
         task_id = f"{_slug(task_type)}-{uuid4().hex[:8]}"
         session_id = f"task:{task_id}"
@@ -54,6 +56,10 @@ class TaskSessionFactory:
             "user_request": user_request,
             "memory_root": stored_memory_root,
         })
+        if user_id:
+            session.metadata["user_id"] = user_id
+        if user_role:
+            session.metadata["user_role"] = user_role
         return TaskSessionRecord(
             session=session,
             task_id=task_id,

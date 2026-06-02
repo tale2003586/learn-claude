@@ -608,6 +608,14 @@ button {
   padding: 12px;
 }
 
+.account-actions {
+  padding: 0 12px 12px;
+}
+
+.account-actions .text-button {
+  width: 100%;
+}
+
 .workspace-card p {
   margin: 8px 0 0;
   color: var(--text);

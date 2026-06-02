@@ -51,6 +51,8 @@ UNLOCKED_TOOLS_KEY = "unlocked_tools"
 SESSION_SCOPED_TOOLS = {
     "memorize",
     "recall_memory",
+    "storage_list_files",
+    "storage_read_file",
     "storage_write_file",
     "sandbox_list_files",
     "sandbox_read_file",
@@ -68,9 +70,16 @@ class ToolSpec:
     enabled_modes: set[str] | None = None
     source: str = "local"
     always_on: bool = False
+    session_scoped: bool = False
+    admin_only: bool = False
 
-    def enabled_for(self, mode: str) -> bool:
-        return self.enabled_modes is None or mode in self.enabled_modes
+    def enabled_for(self, mode: str, session=None) -> bool:
+        if self.enabled_modes is not None and mode not in self.enabled_modes:
+            return False
+        if self.admin_only and session is not None:
+            metadata = getattr(session, "metadata", {}) or {}
+            return metadata.get("user_role", "admin") == "admin"
+        return True
 
 
 class ToolRegistry:
@@ -86,6 +95,8 @@ class ToolRegistry:
         enabled_modes: set[str] | None = None,
         source: str = "local",
         always_on: bool = False,
+        session_scoped: bool = False,
+        admin_only: bool = False,
     ) -> None:
         name = schema["function"]["name"]
         self._tools[name] = ToolSpec(
@@ -96,6 +107,8 @@ class ToolRegistry:
             enabled_modes=enabled_modes,
             source=source,
             always_on=always_on,
+            session_scoped=session_scoped,
+            admin_only=admin_only,
         )
 
     def unregister(self, name: str) -> None:
@@ -139,7 +152,7 @@ class ToolRegistry:
         allowed = {
             name
             for name, tool in self._tools.items()
-            if tool.enabled_for(mode)
+            if tool.enabled_for(mode, session)
         }
         metadata = session.metadata or {}
         if metadata.get("kind") == "scheduled_agent":
@@ -183,7 +196,7 @@ class ToolRegistry:
         tool = self._tools[name]
         try:
             handler_args = dict(args)
-            if name in SESSION_SCOPED_TOOLS:
+            if tool.session_scoped or name in SESSION_SCOPED_TOOLS:
                 handler_args["_session"] = session
             return tool.handler(**handler_args)
         except Exception as e:
@@ -201,7 +214,7 @@ class ToolRegistry:
         tool = self._tools.get(name)
         if tool is None:
             return f"Unknown tool: {name}"
-        if not tool.enabled_for(mode):
+        if not tool.enabled_for(mode, session):
             return f"Tool '{name}' is not allowed in {mode} mode."
         if session is not None and name not in self.visible_names_for_turn(session, mode):
             return (
@@ -215,7 +228,7 @@ class ToolRegistry:
         allowed = {
             name
             for name, tool in self._tools.items()
-            if tool.enabled_for(mode)
+            if tool.enabled_for(mode, session)
         }
 
         if query.lower().startswith("select:"):
