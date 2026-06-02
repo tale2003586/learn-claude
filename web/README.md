@@ -4,6 +4,8 @@
 
 推荐部署方式：Docker Compose + Nginx + HTTPS。
 
+Telegram 私聊接入见：[Telegram Gateway 部署说明](../docs/TELEGRAM_GATEWAY.md)。
+
 ## 0. 功能和快捷键
 
 启动后打开浏览器即可使用：

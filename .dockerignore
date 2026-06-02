@@ -10,6 +10,7 @@ __pycache__
 .team
 .transcripts
 .scheduler
+.gateway
 .users
 storage
 .agents

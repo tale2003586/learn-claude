@@ -110,6 +110,14 @@ class AgentLoop:
 
     def _apply_inbound_identity(self, session, inbound) -> None:
         metadata = inbound.metadata or {}
+        inbound_user_id = metadata.get("user_id")
+        session_user_id = session.metadata.get("user_id")
+        if (
+            inbound_user_id is not None
+            and session_user_id is not None
+            and inbound_user_id != session_user_id
+        ):
+            raise ValueError("Inbound user identity does not match the existing session.")
         for key in ("user_id", "user_role"):
-            if key in metadata and key not in session.metadata:
+            if key in metadata:
                 session.metadata[key] = metadata[key]
