@@ -49,6 +49,7 @@ const els = {
   sessionCountMetric: document.querySelector("#sessionCountMetric"),
   memoryCountMetric: document.querySelector("#memoryCountMetric"),
   currentUserMetric: document.querySelector("#currentUserMetric"),
+  sidebarUserLabel: document.querySelector("#sidebarUserLabel"),
   logoutBtn: document.querySelector("#logoutBtn"),
   refreshFilesBtn: document.querySelector("#refreshFilesBtn"),
   filePathLabel: document.querySelector("#filePathLabel"),
@@ -859,6 +860,7 @@ async function loadHealth() {
     const data = await fetchJson("/api/health");
     state.currentUser = data.user || state.currentUser;
     els.workspaceLabel.textContent = `${state.currentUser.id} · ${state.currentUser.role}`;
+    els.sidebarUserLabel.textContent = state.currentUser.id;
     els.workspacePath.textContent = data.workspace;
     for (const button of els.modeActions.querySelectorAll("[data-required-role]")) {
       button.hidden = button.dataset.requiredRole !== state.currentUser.role;

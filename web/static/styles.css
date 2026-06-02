@@ -127,7 +127,7 @@ button {
 
 .sidebar {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   min-width: 0;
   background: transparent;
 }
@@ -608,12 +608,49 @@ button {
   padding: 12px;
 }
 
-.account-actions {
-  padding: 0 12px 12px;
+.sidebar-account {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  background: rgba(15, 23, 42, 0.42);
 }
 
-.account-actions .text-button {
-  width: 100%;
+.sidebar-account-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  margin-right: auto;
+}
+
+.sidebar-account-copy span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sidebar-account-copy strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logout-button {
+  min-height: 34px;
+  flex: 0 0 auto;
+  padding: 0 10px;
+  border: 1px solid rgba(249, 115, 22, 0.32);
+  border-radius: 8px;
+  color: #fdba74;
+  background: var(--warm-soft);
+}
+
+.logout-button:hover {
+  border-color: rgba(249, 115, 22, 0.62);
+  background: rgba(249, 115, 22, 0.24);
 }
 
 .workspace-card p {
@@ -1486,7 +1523,8 @@ button {
 .app-shell.is-collapsed .brand-copy,
 .app-shell.is-collapsed .status-badge,
 .app-shell.is-collapsed .sidebar-tabs,
-.app-shell.is-collapsed .sidebar-content {
+.app-shell.is-collapsed .sidebar-content,
+.app-shell.is-collapsed .sidebar-account {
   display: none;
 }
 
@@ -1566,8 +1604,12 @@ button {
     display: block;
   }
 
+  .app-shell.is-collapsed .sidebar-account {
+    display: flex;
+  }
+
   .app-shell.is-collapsed .sidebar {
-    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
   }
 
   .app-shell.is-collapsed .sidebar-top {
