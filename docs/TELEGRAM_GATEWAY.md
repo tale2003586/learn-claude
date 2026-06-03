@@ -220,6 +220,11 @@ scheduler 不直接调用 Telegram API，而是把通知写入共享数据库：
 报告文件作为 Telegram document 发送。这样即使 Telegram 网络临时失败，消息和文件也会保留在
 outbox 中等待重试。
 
+这套通知同时适用于两种执行入口：
+
+- 到点后由 `scheduler-worker` 自动执行
+- 聊天中调用 `schedule_run_now` 立即执行一次
+
 要让定时任务完成后主动发给你，至少确认三件事：
 
 ```env
@@ -412,7 +417,7 @@ git diff --check
 本次改动完成后，完整单元测试结果为：
 
 ```text
-Ran 132 tests
+Ran 133 tests
 OK
 ```
 

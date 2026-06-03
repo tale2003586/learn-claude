@@ -1,4 +1,5 @@
 import json
+import logging
 
 from plugins.base import Plugin, ToolRegistration
 from plugins.scheduler.planning import (
@@ -9,6 +10,9 @@ from plugins.scheduler.planning import (
 from plugins.scheduler.reports import ScheduledReportService
 from plugins.scheduler.store import ScheduleStore
 from tools.schema import function_tool
+
+
+logger = logging.getLogger(__name__)
 
 
 class SchedulerPlugin(Plugin):
@@ -478,13 +482,12 @@ class SchedulerPlugin(Plugin):
                     ensure_ascii=False,
                     indent=2,
                 )
-            return json.dumps(
-                self.agent_runner.run(schedule_id),
-                ensure_ascii=False,
-                indent=2,
-            )
+            result = self.agent_runner.run(schedule_id)
+        else:
+            result = self.reports.run(schedule_id)
+        self._notify_run(schedule, result)
         return json.dumps(
-            self.reports.run(schedule_id),
+            result,
             ensure_ascii=False,
             indent=2,
         )
@@ -528,3 +531,17 @@ class SchedulerPlugin(Plugin):
         if self.auditor is None:
             raise RuntimeError("Scheduler tool auditor is not available.")
         return self.auditor
+
+    def _notify_run(self, schedule: dict, result: dict) -> None:
+        try:
+            from scheduler_worker import TelegramScheduleNotifier
+
+            TelegramScheduleNotifier(workspace=self.context.workspace).notify(
+                schedule,
+                result,
+            )
+        except Exception:
+            # Running a schedule now should still return the report result even if
+            # optional Telegram delivery is unavailable.
+            logger.exception("Telegram notification failed for schedule_run_now.")
+            return

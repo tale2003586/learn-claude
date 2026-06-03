@@ -684,6 +684,52 @@ class SchedulerPluginTests(unittest.TestCase):
 
             self.assertEqual("llm_analyze", created["workflow"][1]["type"])
 
+    def test_run_now_enqueues_telegram_report_file(self) -> None:
+        class Reports:
+            def __init__(self, workspace):
+                self.workspace = workspace
+
+            def run(self, schedule_id):
+                report = self.workspace / "storage" / "reports" / "now.md"
+                report.parent.mkdir(parents=True, exist_ok=True)
+                report.write_text("# Run now\n\nAI news.", encoding="utf-8")
+                return {
+                    "status": "success",
+                    "schedule_id": schedule_id,
+                    "run_id": 11,
+                    "report_path": "storage/reports/now.md",
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            plugin = SchedulerPlugin()
+            plugin.setup(SimpleNamespace(workspace=workspace))
+            plugin.reports = Reports(workspace)
+            schedule = plugin.store.create(
+                name="daily-ai",
+                query="latest AI news",
+                hour=8,
+            )
+
+            with patch.dict(
+                "os.environ",
+                {"TELEGRAM_NOTIFY_CHAT_IDS": "123"},
+                clear=True,
+            ):
+                result = json.loads(plugin.schedule_run_now(schedule_id=schedule["id"]))
+
+            store = TelegramGatewayStore(workspace / ".gateway" / "telegram.db")
+            try:
+                pending = store.list_pending_messages()
+            finally:
+                store.close()
+
+            self.assertEqual("success", result["status"])
+            self.assertEqual(2, len(pending))
+            self.assertEqual("text", pending[0]["message_type"])
+            self.assertEqual("document", pending[1]["message_type"])
+            self.assertEqual("storage/reports/now.md", pending[1]["document_path"])
+
     def test_plugin_creates_and_approves_agent_draft(self) -> None:
         class Planner:
             def create_draft(self, *, task_prompt, auditor):

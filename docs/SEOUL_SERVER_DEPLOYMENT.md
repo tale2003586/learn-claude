@@ -423,6 +423,8 @@ scheduler-worker -> .gateway/telegram.db outbox -> telegram-worker -> Telegram
 2. 生成的 Markdown 报告文件
 ```
 
+这对到点自动执行和聊天中“立即运行一次当前任务”都生效。
+
 编辑 `.env`，显式写入你的 Telegram user ID：
 
 ```env
