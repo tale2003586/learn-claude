@@ -4,6 +4,8 @@
 
 推荐部署方式：Docker Compose + Nginx + HTTPS。
 
+新的首尔 Ubuntu 服务器从零部署见：[首尔服务器完整部署手册](../docs/SEOUL_SERVER_DEPLOYMENT.md)。
+
 Telegram 私聊接入见：[Telegram Gateway 部署说明](../docs/TELEGRAM_GATEWAY.md)。
 
 ## 0. 功能和快捷键

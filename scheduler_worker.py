@@ -1,7 +1,9 @@
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
+from gateway.telegram.store import TelegramGatewayStore
 from plugins.scheduler.reports import ScheduledReportService
 from plugins.scheduler.store import ScheduleStore
 
@@ -14,6 +16,7 @@ class SchedulerWorker:
         reports=None,
         agent_runner=None,
         agent_runner_factory=None,
+        notifier=None,
         scheduler=None,
         cron_trigger=None,
     ) -> None:
@@ -21,6 +24,7 @@ class SchedulerWorker:
         self.reports = reports or ScheduledReportService(store=self.store)
         self.agent_runner = agent_runner
         self.agent_runner_factory = agent_runner_factory or _build_agent_runner
+        self.notifier = notifier if notifier is not None else TelegramScheduleNotifier()
         if scheduler is None or cron_trigger is None:
             try:
                 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -90,6 +94,7 @@ class SchedulerWorker:
             result = self.agent_runner.run(schedule_id)
         else:
             result = self.reports.run(schedule_id)
+        self.notifier.notify(schedule, result)
         print(f"Schedule #{schedule_id}: {result}")
 
     def run_forever(self) -> None:
@@ -129,6 +134,119 @@ def _build_agent_runner():
         if isinstance(plugin, SchedulerPlugin) and plugin.agent_runner is not None:
             return plugin.agent_runner
     raise RuntimeError("Scheduled agent runner could not be initialized.")
+
+
+class TelegramScheduleNotifier:
+    def __init__(
+        self,
+        *,
+        store=None,
+        workspace: str | Path | None = None,
+    ) -> None:
+        self.workspace = Path(workspace or Path.cwd()).resolve()
+        self._store = store
+
+    def notify(self, schedule: dict, result: dict) -> None:
+        chat_ids = _notification_chat_ids()
+        if not chat_ids:
+            return
+        text = _notification_text(schedule, result, workspace=self.workspace)
+        for chat_id in chat_ids:
+            self.store.enqueue_message(
+                chat_id=chat_id,
+                text=text,
+                source="scheduler",
+                metadata={
+                    "schedule_id": schedule.get("id"),
+                    "run_id": result.get("run_id"),
+                    "status": result.get("status"),
+                    "report_path": result.get("report_path"),
+                },
+            )
+
+    @property
+    def store(self):
+        if self._store is None:
+            self._store = TelegramGatewayStore(self.workspace / ".gateway" / "telegram.db")
+        return self._store
+
+
+def _notification_chat_ids() -> list[int]:
+    explicit = os.environ.get("TELEGRAM_NOTIFY_CHAT_IDS", "").strip()
+    if explicit:
+        return _parse_int_list(explicit, allow_star=False)
+    mapped = []
+    user_map = os.environ.get("TELEGRAM_USER_MAP", "").strip()
+    if user_map:
+        import json
+
+        try:
+            payload = json.loads(user_map)
+            if isinstance(payload, dict):
+                mapped.extend(_parse_int_list(",".join(payload.keys()), allow_star=False))
+        except json.JSONDecodeError:
+            pass
+    allowed = os.environ.get("TELEGRAM_ALLOWED_USER_IDS", "").strip()
+    mapped.extend(_parse_int_list(allowed, allow_star=False))
+    seen = set()
+    result = []
+    for item in mapped:
+        if item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
+
+
+def _parse_int_list(value: str, *, allow_star: bool) -> list[int]:
+    result = []
+    for item in str(value or "").split(","):
+        cleaned = item.strip()
+        if not cleaned or (cleaned == "*" and not allow_star):
+            continue
+        try:
+            parsed = int(cleaned)
+        except ValueError:
+            continue
+        if parsed > 0:
+            result.append(parsed)
+    return result
+
+
+def _notification_text(schedule: dict, result: dict, *, workspace: Path) -> str:
+    status = result.get("status", "unknown")
+    report_path = str(result.get("report_path") or "")
+    lines = [
+        f"定时任务完成：{schedule.get('name', 'unnamed')}",
+        f"状态：{status}",
+    ]
+    if result.get("error"):
+        lines.append(f"错误：{result['error']}")
+    if report_path:
+        lines.append(f"报告：{report_path}")
+    content = _report_excerpt(report_path, workspace=workspace)
+    if content:
+        lines.extend(["", content])
+    return "\n".join(lines).strip()
+
+
+def _report_excerpt(report_path: str, *, workspace: Path) -> str:
+    if not report_path:
+        return ""
+    path = (workspace / report_path).resolve()
+    if not path.is_file() or not path.is_relative_to(workspace):
+        return ""
+    max_chars = _env_int("TELEGRAM_NOTIFY_MAX_CHARS", default=3500, minimum=500)
+    text = path.read_text(encoding="utf-8", errors="replace").strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "\n\n[报告内容已截断，可到 Web 文件区查看完整报告。]"
+
+
+def _env_int(name: str, *, default: int, minimum: int) -> int:
+    try:
+        return max(minimum, int(os.environ.get(name, str(default))))
+    except ValueError:
+        return default
 
 
 def main() -> None:

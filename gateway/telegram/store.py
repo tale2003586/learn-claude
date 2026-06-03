@@ -5,6 +5,7 @@ import sqlite3
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 
 class TelegramGatewayStore:
@@ -34,6 +35,29 @@ class TelegramGatewayStore:
                     conversation_id  TEXT NOT NULL,
                     updated_at       TEXT NOT NULL
                 )
+                """
+            )
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS telegram_outbox (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id    TEXT NOT NULL,
+                    text       TEXT NOT NULL,
+                    status     TEXT NOT NULL DEFAULT 'pending',
+                    attempts   INTEGER NOT NULL DEFAULT 0,
+                    source     TEXT,
+                    metadata   TEXT NOT NULL DEFAULT '{}',
+                    error      TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    sent_at    TEXT
+                )
+                """
+            )
+            self._conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_telegram_outbox_status
+                ON telegram_outbox(status, id)
                 """
             )
             self._conn.commit()
@@ -93,6 +117,103 @@ class TelegramGatewayStore:
             user_id=user_id,
         )
 
+    def enqueue_message(
+        self,
+        *,
+        chat_id: int | str,
+        text: str,
+        source: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            cursor = self._conn.execute(
+                """
+                INSERT INTO telegram_outbox (
+                    chat_id, text, status, attempts, source, metadata, created_at, updated_at
+                )
+                VALUES (?, ?, 'pending', 0, ?, ?, ?, ?)
+                """,
+                (
+                    str(chat_id),
+                    str(text),
+                    str(source or ""),
+                    _json_dumps(metadata or {}),
+                    now,
+                    now,
+                ),
+            )
+            self._conn.commit()
+            return int(cursor.lastrowid)
+
+    def list_pending_messages(self, *, limit: int = 10) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT id, chat_id, text, attempts, source, metadata, created_at
+                FROM telegram_outbox
+                WHERE status = 'pending'
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                (max(1, int(limit)),),
+            ).fetchall()
+        return [
+            {
+                "id": int(row[0]),
+                "chat_id": row[1],
+                "text": row[2],
+                "attempts": int(row[3]),
+                "source": row[4] or "",
+                "metadata": _json_loads(row[5]),
+                "created_at": row[6],
+            }
+            for row in rows
+        ]
+
+    def mark_message_sent(self, message_id: int) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            self._conn.execute(
+                """
+                UPDATE telegram_outbox
+                SET status = 'sent',
+                    updated_at = ?,
+                    sent_at = ?
+                WHERE id = ?
+                """,
+                (now, now, int(message_id)),
+            )
+            self._conn.commit()
+
+    def mark_message_failed(
+        self,
+        message_id: int,
+        *,
+        error: str,
+        max_attempts: int = 3,
+    ) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT attempts FROM telegram_outbox WHERE id = ?",
+                (int(message_id),),
+            ).fetchone()
+            attempts = int(row[0]) + 1 if row is not None else 1
+            status = "failed" if attempts >= max(1, int(max_attempts)) else "pending"
+            self._conn.execute(
+                """
+                UPDATE telegram_outbox
+                SET status = ?,
+                    attempts = ?,
+                    error = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (status, attempts, str(error)[:1000], now, int(message_id)),
+            )
+            self._conn.commit()
+
     def close(self) -> None:
         with self._lock:
             self._conn.close()
@@ -128,3 +249,19 @@ def external_chat_id_from_runtime(value: str) -> int:
     if len(parts) != 3 or parts[0] != "tg":
         raise ValueError("Invalid Telegram runtime chat ID.")
     return int(parts[1])
+
+
+def _json_dumps(value: Any) -> str:
+    import json
+
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def _json_loads(value: str) -> dict[str, Any]:
+    import json
+
+    try:
+        loaded = json.loads(value or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}

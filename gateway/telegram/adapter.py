@@ -9,6 +9,12 @@ from bus.events import OutboundMessage
 from gateway.base import ChannelAdapter
 from gateway.telegram.client import TelegramBotApiClient
 from gateway.telegram.identity import TelegramIdentity, TelegramIdentityResolver
+from gateway.telegram.storage import (
+    list_storage_text,
+    preview_storage_text,
+    resolve_download_path,
+    storage_help_text,
+)
 from gateway.telegram.store import (
     TelegramGatewayStore,
     external_chat_id_from_runtime,
@@ -39,6 +45,8 @@ class TelegramGateway(ChannelAdapter):
         self.store = store
         self.poll_timeout = max(1, int(poll_timeout))
         self.retry_delay = max(0.0, float(retry_delay))
+        self.outbox_limit = _env_int("TELEGRAM_OUTBOX_BATCH_SIZE", default=10, minimum=1)
+        self.outbox_max_attempts = _env_int("TELEGRAM_OUTBOX_MAX_ATTEMPTS", default=3, minimum=1)
         self._stopping = False
 
     @classmethod
@@ -57,7 +65,9 @@ class TelegramGateway(ChannelAdapter):
         self.runtime.start()
         while not self._stopping:
             try:
+                await self.flush_outbox()
                 await self.poll_once()
+                await self.flush_outbox()
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -124,9 +134,12 @@ class TelegramGateway(ChannelAdapter):
                 (
                     "taleclaw 已连接。\n"
                     "直接发送文字即可开始对话。\n"
-                    "可用命令：/new、/status"
+                    "可用命令：/new、/status、/files、/cat、/download"
                 ),
             )
+            return
+        if command in {"/help", "/files_help"}:
+            await self.client.send_message(external_chat_id, storage_help_text())
             return
         if command == "/new":
             self.store.start_conversation(external_chat_id)
@@ -136,6 +149,40 @@ class TelegramGateway(ChannelAdapter):
             await self.client.send_message(
                 external_chat_id,
                 _status_text(identity, self.store.get_conversation_id(external_chat_id)),
+            )
+            return
+        if command in {"/files", "/ls"}:
+            try:
+                reply = list_storage_text(identity.user_id, _command_arg(text))
+            except Exception as exc:
+                reply = str(exc)
+            await self.client.send_message(external_chat_id, reply)
+            return
+        if command == "/cat":
+            path_arg = _command_arg(text)
+            if not path_arg:
+                await self.client.send_message(external_chat_id, "用法：/cat <文件路径>")
+                return
+            try:
+                reply = preview_storage_text(identity.user_id, path_arg)
+            except Exception as exc:
+                reply = str(exc)
+            await self.client.send_message(external_chat_id, reply)
+            return
+        if command == "/download":
+            path_arg = _command_arg(text)
+            if not path_arg:
+                await self.client.send_message(external_chat_id, "用法：/download <文件路径>")
+                return
+            try:
+                path = resolve_download_path(identity.user_id, path_arg)
+            except Exception as exc:
+                await self.client.send_message(external_chat_id, str(exc))
+                return
+            await self.client.send_document(
+                external_chat_id,
+                path,
+                caption=f"storage/{path_arg.strip().lstrip('/')}",
             )
             return
 
@@ -161,6 +208,19 @@ class TelegramGateway(ChannelAdapter):
     async def send(self, message: OutboundMessage) -> None:
         external_chat_id = external_chat_id_from_runtime(message.chat_id)
         await self.client.send_message(external_chat_id, message.content)
+
+    async def flush_outbox(self) -> None:
+        for item in self.store.list_pending_messages(limit=self.outbox_limit):
+            try:
+                await self.client.send_message(item["chat_id"], item["text"])
+                self.store.mark_message_sent(item["id"])
+            except Exception as exc:
+                logger.exception("Telegram outbox delivery failed.")
+                self.store.mark_message_failed(
+                    item["id"],
+                    error=f"{type(exc).__name__}: {exc}",
+                    max_attempts=self.outbox_max_attempts,
+                )
 
     async def close(self) -> None:
         self._stopping = True
@@ -191,6 +251,11 @@ def _integer_id(value: Any) -> int | None:
 def _command_name(text: str) -> str:
     head = str(text or "").strip().split(maxsplit=1)[0].lower()
     return head.split("@", 1)[0]
+
+
+def _command_arg(text: str) -> str:
+    parts = str(text or "").strip().split(maxsplit=1)
+    return parts[1].strip() if len(parts) > 1 else ""
 
 
 def _env_int(name: str, *, default: int, minimum: int) -> int:

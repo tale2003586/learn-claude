@@ -49,6 +49,7 @@ services:
       - ./.task_sessions:/app/.task_sessions
       - ./.task_sandbox:/app/.task_sandbox
       - ./.scheduler:/app/.scheduler
+      - ./.gateway:/app/.gateway
       - ./.users:/app/.users
 
   telegram-worker:
@@ -68,6 +69,8 @@ services:
     env_file:
       - ${AGENT_CONSOLE_ENV_FILE:-.env}
     command: ["python", "telegram_worker.py"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./storage:/app/storage
       - ./memory:/app/memory

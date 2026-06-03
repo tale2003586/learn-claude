@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -64,6 +65,45 @@ class TelegramBotApiClient:
             "action": action,
         })
 
+    async def send_document(
+        self,
+        chat_id: int | str,
+        path: str | Path,
+        *,
+        caption: str = "",
+    ) -> None:
+        document_path = Path(path)
+        mime = "application/octet-stream"
+        try:
+            import mimetypes
+
+            mime = mimetypes.guess_type(document_path.name)[0] or mime
+        except Exception:
+            pass
+        try:
+            with document_path.open("rb") as handle:
+                response = await self._client.post(
+                    "sendDocument",
+                    data={
+                        "chat_id": str(chat_id),
+                        "caption": str(caption or "")[:1024],
+                    },
+                    files={
+                        "document": (document_path.name, handle, mime),
+                    },
+                )
+            response.raise_for_status()
+            data = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise TelegramBotApiError(
+                _request_failure_message("sendDocument", exc)
+            ) from None
+        if not isinstance(data, dict) or not data.get("ok"):
+            description = data.get("description") if isinstance(data, dict) else None
+            raise TelegramBotApiError(
+                f"Telegram Bot API rejected sendDocument: {description or 'unknown error'}"
+            )
+
     async def close(self) -> None:
         if self._owns_client:
             await self._client.aclose()
@@ -85,7 +125,7 @@ class TelegramBotApiClient:
             data = response.json()
         except (httpx.HTTPError, ValueError) as exc:
             raise TelegramBotApiError(
-                f"Telegram Bot API request failed for {method}."
+                _request_failure_message(method, exc)
             ) from None
         if not isinstance(data, dict) or not data.get("ok"):
             description = data.get("description") if isinstance(data, dict) else None
@@ -93,6 +133,44 @@ class TelegramBotApiClient:
                 f"Telegram Bot API rejected {method}: {description or 'unknown error'}"
             )
         return data.get("result")
+
+
+def _request_failure_message(method: str, exc: Exception) -> str:
+    prefix = f"Telegram Bot API request failed for {method}:"
+    if isinstance(exc, httpx.ProxyError):
+        return f"{prefix} proxy connection failed. Check TELEGRAM_PROXY_URL."
+    if isinstance(exc, httpx.ConnectTimeout):
+        return (
+            f"{prefix} connection timed out. Check server access to api.telegram.org "
+            "or configure TELEGRAM_PROXY_URL."
+        )
+    if isinstance(exc, httpx.ReadTimeout):
+        return f"{prefix} response timed out. Check the Telegram API connection."
+    if isinstance(exc, httpx.ConnectError):
+        return (
+            f"{prefix} could not connect to api.telegram.org. "
+            "Check network access or TELEGRAM_PROXY_URL."
+        )
+    if isinstance(exc, httpx.TimeoutException):
+        return f"{prefix} request timed out. Check the Telegram API connection."
+    if isinstance(exc, httpx.HTTPStatusError):
+        return _http_status_failure_message(method, exc.response.status_code)
+    if isinstance(exc, httpx.HTTPError):
+        return f"{prefix} network request failed."
+    return f"{prefix} Telegram returned an invalid JSON response."
+
+
+def _http_status_failure_message(method: str, status_code: int) -> str:
+    prefix = f"Telegram Bot API request failed for {method}: HTTP {status_code}."
+    if status_code in {401, 404}:
+        return f"{prefix} Check TELEGRAM_BOT_TOKEN."
+    if status_code == 409:
+        return (
+            f"{prefix} Remove an existing webhook or stop any other getUpdates worker."
+        )
+    if status_code == 429:
+        return f"{prefix} Telegram rate limit reached; retry later."
+    return prefix
 
 
 def split_telegram_text(text: str, *, limit: int = SAFE_TEXT_CHUNK_SIZE) -> list[str]:

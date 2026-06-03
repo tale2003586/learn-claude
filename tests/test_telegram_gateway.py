@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -134,17 +135,51 @@ class TelegramClientTests(unittest.IsolatedAsyncioTestCase):
             client = TelegramBotApiClient("test-token", http_client=http_client)
             with self.assertRaisesRegex(
                 RuntimeError,
-                "Telegram Bot API request failed for getUpdates",
+                "could not connect to api.telegram.org",
             ) as caught:
                 await client.get_updates()
 
         self.assertTrue(caught.exception.__suppress_context__)
+        self.assertNotIn("test-token", str(caught.exception))
+
+    async def test_http_401_explains_token_without_echoing_it(self):
+        async def handler(request):
+            return httpx.Response(401, json={"ok": False})
+
+        async with httpx.AsyncClient(
+            base_url="https://example.test",
+            transport=httpx.MockTransport(handler),
+        ) as http_client:
+            client = TelegramBotApiClient("test-token", http_client=http_client)
+            with self.assertRaisesRegex(
+                RuntimeError,
+                r"HTTP 401\. Check TELEGRAM_BOT_TOKEN",
+            ) as caught:
+                await client.get_updates()
+
+        self.assertNotIn("test-token", str(caught.exception))
+
+    async def test_http_409_explains_polling_conflict(self):
+        async def handler(request):
+            return httpx.Response(409, json={"ok": False})
+
+        async with httpx.AsyncClient(
+            base_url="https://example.test",
+            transport=httpx.MockTransport(handler),
+        ) as http_client:
+            client = TelegramBotApiClient("test-token", http_client=http_client)
+            with self.assertRaisesRegex(
+                RuntimeError,
+                r"HTTP 409\. Remove an existing webhook",
+            ):
+                await client.get_updates()
 
 
 class FakeTelegramClient:
     def __init__(self, updates=None):
         self.updates = list(updates or [])
         self.sent = []
+        self.documents = []
         self.actions = []
         self.get_updates_calls = []
         self.closed = False
@@ -159,6 +194,9 @@ class FakeTelegramClient:
 
     async def send_chat_action(self, chat_id, action="typing"):
         self.actions.append((chat_id, action))
+
+    async def send_document(self, chat_id, path, *, caption=""):
+        self.documents.append((chat_id, Path(path).name, caption))
 
     async def close(self):
         self.closed = True
@@ -208,6 +246,8 @@ def private_update(update_id=1, *, chat_id=123, user_id=123, text="hello"):
 class TelegramGatewayTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
+        self.old_cwd = Path.cwd()
+        os.chdir(self.temp_dir.name)
         self.store = TelegramGatewayStore(Path(self.temp_dir.name) / "telegram.db")
         self.client = FakeTelegramClient()
         self.runtime = FakeRuntime()
@@ -221,6 +261,7 @@ class TelegramGatewayTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         self.store.close()
+        os.chdir(self.old_cwd)
         self.temp_dir.cleanup()
 
     async def test_private_text_enters_runtime_with_isolated_identity(self):
@@ -276,6 +317,52 @@ class TelegramGatewayTests(unittest.IsolatedAsyncioTestCase):
         ))
 
         self.assertEqual(self.client.sent, [(123, "reply")])
+
+    async def test_flush_outbox_sends_and_marks_message(self):
+        message_id = self.store.enqueue_message(
+            chat_id=123,
+            text="scheduled report",
+            source="scheduler",
+        )
+
+        await self.gateway.flush_outbox()
+
+        self.assertEqual(self.client.sent, [("123", "scheduled report")])
+        self.assertEqual(self.store.list_pending_messages(), [])
+        self.assertEqual(message_id, 1)
+
+    async def test_files_command_lists_current_users_storage(self):
+        storage = Path(".users/telegram_123/storage")
+        (storage / "reports").mkdir(parents=True)
+        (storage / "reports" / "daily.md").write_text("daily", encoding="utf-8")
+
+        await self.gateway.handle_update(private_update(text="/files reports"))
+
+        self.assertIn("daily.md", self.client.sent[-1][1])
+        self.assertIn("/cat reports/daily.md", self.client.sent[-1][1])
+
+    async def test_cat_command_previews_text_file(self):
+        storage = Path(".users/telegram_123/storage")
+        storage.mkdir(parents=True)
+        (storage / "note.md").write_text("hello storage", encoding="utf-8")
+
+        await self.gateway.handle_update(private_update(text="/cat note.md"))
+
+        self.assertIn("hello storage", self.client.sent[-1][1])
+
+    async def test_download_command_sends_document(self):
+        storage = Path(".users/telegram_123/storage")
+        storage.mkdir(parents=True)
+        (storage / "note.md").write_text("hello storage", encoding="utf-8")
+
+        await self.gateway.handle_update(private_update(text="/download note.md"))
+
+        self.assertEqual(self.client.documents, [(123, "note.md", "storage/note.md")])
+
+    async def test_storage_command_rejects_escape(self):
+        await self.gateway.handle_update(private_update(text="/cat ../../.env"))
+
+        self.assertIn("storage", self.client.sent[-1][1])
 
 
 class AgentLoopIdentityTests(unittest.TestCase):

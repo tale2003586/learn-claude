@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from core.context import ContextBuilder
 from core.pipeline import Pipeline
@@ -21,7 +22,8 @@ from plugins.scheduler.store import ScheduleStore
 from plugins.scheduler.workflow import WorkflowExecutor, validate_workflow
 from plugins.web_search.client import TavilySearchClient
 from plugins.web_search.plugin import WebSearchPlugin
-from scheduler_worker import SchedulerWorker
+from gateway.telegram.store import TelegramGatewayStore
+from scheduler_worker import SchedulerWorker, TelegramScheduleNotifier
 from sessions import SessionManager
 from tasksessions.conclusions import ConclusionExtraction
 from tasksessions.promotion import PromotionResult
@@ -905,6 +907,47 @@ class SchedulerWorkerTests(unittest.TestCase):
         )
         self.assertEqual([1], reports.calls)
         self.assertEqual([2], agent_runner.calls)
+
+    def test_telegram_notifier_enqueues_schedule_report_excerpt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            report = root / "storage" / "reports" / "daily.md"
+            report.parent.mkdir(parents=True)
+            report.write_text("# Daily\n\nAI news.", encoding="utf-8")
+            store = TelegramGatewayStore(root / ".gateway" / "telegram.db")
+            notifier = TelegramScheduleNotifier(store=store, workspace=root)
+            try:
+                with patch.dict(
+                    "os.environ",
+                    {"TELEGRAM_NOTIFY_CHAT_IDS": "123"},
+                    clear=True,
+                ):
+                    notifier.notify(
+                        {"id": 1, "name": "daily-ai"},
+                        {
+                            "status": "success",
+                            "run_id": 7,
+                            "report_path": "storage/reports/daily.md",
+                        },
+                    )
+
+                pending = store.list_pending_messages()
+                self.assertEqual(1, len(pending))
+                self.assertEqual("123", pending[0]["chat_id"])
+                self.assertIn("定时任务完成：daily-ai", pending[0]["text"])
+                self.assertIn("AI news.", pending[0]["text"])
+            finally:
+                store.close()
+
+    def test_telegram_notifier_is_noop_without_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            notifier = TelegramScheduleNotifier(workspace=root)
+
+            with patch.dict("os.environ", {}, clear=True):
+                notifier.notify({"id": 1, "name": "daily-ai"}, {"status": "success"})
+
+            self.assertFalse((root / ".gateway").exists())
 
 
 class WebSearchVisibilityTests(unittest.TestCase):
