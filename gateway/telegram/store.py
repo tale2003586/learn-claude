@@ -43,6 +43,9 @@ class TelegramGatewayStore:
                     id         INTEGER PRIMARY KEY AUTOINCREMENT,
                     chat_id    TEXT NOT NULL,
                     text       TEXT NOT NULL,
+                    message_type TEXT NOT NULL DEFAULT 'text',
+                    document_path TEXT,
+                    caption    TEXT,
                     status     TEXT NOT NULL DEFAULT 'pending',
                     attempts   INTEGER NOT NULL DEFAULT 0,
                     source     TEXT,
@@ -54,6 +57,13 @@ class TelegramGatewayStore:
                 )
                 """
             )
+            self._ensure_column(
+                "telegram_outbox",
+                "message_type",
+                "TEXT NOT NULL DEFAULT 'text'",
+            )
+            self._ensure_column("telegram_outbox", "document_path", "TEXT")
+            self._ensure_column("telegram_outbox", "caption", "TEXT")
             self._conn.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_telegram_outbox_status
@@ -61,6 +71,16 @@ class TelegramGatewayStore:
                 """
             )
             self._conn.commit()
+
+    def _ensure_column(self, table: str, column: str, definition: str) -> None:
+        columns = {
+            row[1]
+            for row in self._conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if column not in columns:
+            self._conn.execute(
+                f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
+            )
 
     def get_offset(self) -> int | None:
         with self._lock:
@@ -130,9 +150,10 @@ class TelegramGatewayStore:
             cursor = self._conn.execute(
                 """
                 INSERT INTO telegram_outbox (
-                    chat_id, text, status, attempts, source, metadata, created_at, updated_at
+                    chat_id, text, message_type, status, attempts, source, metadata,
+                    created_at, updated_at
                 )
-                VALUES (?, ?, 'pending', 0, ?, ?, ?, ?)
+                VALUES (?, ?, 'text', 'pending', 0, ?, ?, ?, ?)
                 """,
                 (
                     str(chat_id),
@@ -146,11 +167,47 @@ class TelegramGatewayStore:
             self._conn.commit()
             return int(cursor.lastrowid)
 
+    def enqueue_document(
+        self,
+        *,
+        chat_id: int | str,
+        document_path: str | Path,
+        caption: str = "",
+        source: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        caption_text = str(caption or "")
+        path_text = str(document_path)
+        with self._lock:
+            cursor = self._conn.execute(
+                """
+                INSERT INTO telegram_outbox (
+                    chat_id, text, message_type, document_path, caption, status,
+                    attempts, source, metadata, created_at, updated_at
+                )
+                VALUES (?, ?, 'document', ?, ?, 'pending', 0, ?, ?, ?, ?)
+                """,
+                (
+                    str(chat_id),
+                    caption_text or path_text,
+                    path_text,
+                    caption_text,
+                    str(source or ""),
+                    _json_dumps(metadata or {}),
+                    now,
+                    now,
+                ),
+            )
+            self._conn.commit()
+            return int(cursor.lastrowid)
+
     def list_pending_messages(self, *, limit: int = 10) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._conn.execute(
                 """
-                SELECT id, chat_id, text, attempts, source, metadata, created_at
+                SELECT id, chat_id, text, message_type, document_path, caption,
+                       attempts, source, metadata, created_at
                 FROM telegram_outbox
                 WHERE status = 'pending'
                 ORDER BY id ASC
@@ -163,10 +220,13 @@ class TelegramGatewayStore:
                 "id": int(row[0]),
                 "chat_id": row[1],
                 "text": row[2],
-                "attempts": int(row[3]),
-                "source": row[4] or "",
-                "metadata": _json_loads(row[5]),
-                "created_at": row[6],
+                "message_type": row[3] or "text",
+                "document_path": row[4] or "",
+                "caption": row[5] or "",
+                "attempts": int(row[6]),
+                "source": row[7] or "",
+                "metadata": _json_loads(row[8]),
+                "created_at": row[9],
             }
             for row in rows
         ]

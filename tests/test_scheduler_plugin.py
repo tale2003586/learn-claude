@@ -932,10 +932,18 @@ class SchedulerWorkerTests(unittest.TestCase):
                     )
 
                 pending = store.list_pending_messages()
-                self.assertEqual(1, len(pending))
+                self.assertEqual(2, len(pending))
                 self.assertEqual("123", pending[0]["chat_id"])
+                self.assertEqual("text", pending[0]["message_type"])
                 self.assertIn("定时任务完成：daily-ai", pending[0]["text"])
                 self.assertIn("AI news.", pending[0]["text"])
+                self.assertEqual("123", pending[1]["chat_id"])
+                self.assertEqual("document", pending[1]["message_type"])
+                self.assertEqual(
+                    "storage/reports/daily.md",
+                    pending[1]["document_path"],
+                )
+                self.assertIn("daily-ai", pending[1]["caption"])
             finally:
                 store.close()
 

@@ -212,7 +212,14 @@ class TelegramGateway(ChannelAdapter):
     async def flush_outbox(self) -> None:
         for item in self.store.list_pending_messages(limit=self.outbox_limit):
             try:
-                await self.client.send_message(item["chat_id"], item["text"])
+                if item.get("message_type") == "document":
+                    await self.client.send_document(
+                        item["chat_id"],
+                        item["document_path"],
+                        caption=item.get("caption", ""),
+                    )
+                else:
+                    await self.client.send_message(item["chat_id"], item["text"])
                 self.store.mark_message_sent(item["id"])
             except Exception as exc:
                 logger.exception("Telegram outbox delivery failed.")

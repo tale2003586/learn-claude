@@ -30,7 +30,7 @@ InboundMessage -> MessageBus -> AgentLoop -> OutboundMessage
 - `/new`
 - `/status`
 - `/files`、`/cat`、`/download` 查看当前用户的私有 storage
-- scheduler 定时任务完成后主动推送摘要到 Telegram
+- scheduler 定时任务完成后主动推送摘要和报告文件到 Telegram
 - AI 回复超长文本自动拆分
 - 长轮询 offset 持久化
 - Telegram outbox 持久化投递和失败重试
@@ -136,6 +136,8 @@ TELEGRAM_POLL_TIMEOUT=30
 TELEGRAM_RETRY_DELAY=3
 TELEGRAM_NOTIFY_CHAT_IDS=123456789
 TELEGRAM_NOTIFY_MAX_CHARS=3500
+TELEGRAM_NOTIFY_SEND_REPORT_FILE=1
+TELEGRAM_NOTIFY_DOCUMENT_MAX_BYTES=10485760
 TELEGRAM_OUTBOX_BATCH_SIZE=10
 TELEGRAM_OUTBOX_MAX_ATTEMPTS=3
 TELEGRAM_STORAGE_PREVIEW_BYTES=8000
@@ -149,6 +151,8 @@ TELEGRAM_PROXY_URL=
 | `TELEGRAM_RETRY_DELAY` | 网络异常后的重试等待秒数 |
 | `TELEGRAM_NOTIFY_CHAT_IDS` | 定时任务完成后要推送到哪些 Telegram chat ID，逗号分隔 |
 | `TELEGRAM_NOTIFY_MAX_CHARS` | 定时任务报告推送时最多附带多少字符 |
+| `TELEGRAM_NOTIFY_SEND_REPORT_FILE` | 定时任务完成后是否把报告文件作为 Telegram 文件发送，默认 `1` |
+| `TELEGRAM_NOTIFY_DOCUMENT_MAX_BYTES` | 自动推送报告文件的最大大小 |
 | `TELEGRAM_OUTBOX_BATCH_SIZE` | Telegram worker 每轮最多投递多少条 outbox 消息 |
 | `TELEGRAM_OUTBOX_MAX_ATTEMPTS` | outbox 单条消息最多失败重试次数 |
 | `TELEGRAM_STORAGE_PREVIEW_BYTES` | `/cat` 单次最多预览多少字节 |
@@ -212,8 +216,9 @@ scheduler 不直接调用 Telegram API，而是把通知写入共享数据库：
 .gateway/telegram.db
 ```
 
-`telegram-worker` 会在轮询消息前后读取 outbox 并投递。这样即使 Telegram 网络临时失败，消息也会
-保留在 outbox 中等待重试。
+`telegram-worker` 会在轮询消息前后读取 outbox 并投递。定时任务完成后会先发送文字摘要，再把
+报告文件作为 Telegram document 发送。这样即使 Telegram 网络临时失败，消息和文件也会保留在
+outbox 中等待重试。
 
 要让定时任务完成后主动发给你，至少确认三件事：
 
@@ -221,6 +226,7 @@ scheduler 不直接调用 Telegram API，而是把通知写入共享数据库：
 TELEGRAM_BOT_TOKEN=...
 TELEGRAM_ALLOWED_USER_IDS=你的TelegramUserID
 TELEGRAM_NOTIFY_CHAT_IDS=你的TelegramUserID
+TELEGRAM_NOTIFY_SEND_REPORT_FILE=1
 ```
 
 或者使用管理员映射：
@@ -237,10 +243,16 @@ Compose 已为 `scheduler-worker` 和 `telegram-worker` 挂载同一个 `.gatewa
 sudo docker compose --profile telegram up -d --build --force-recreate scheduler-worker telegram-worker
 ```
 
+不想自动发送报告文件时，可以关闭：
+
+```env
+TELEGRAM_NOTIFY_SEND_REPORT_FILE=0
+```
+
 检查 outbox：
 
 ```bash
-sudo docker compose --profile telegram exec telegram-worker \
+sudo docker compose --profile telegram exec -T telegram-worker \
   python - <<'PY'
 from gateway.telegram.store import TelegramGatewayStore
 store = TelegramGatewayStore()
@@ -260,7 +272,7 @@ Telegram Bot API request failed for getUpdates
 先确认容器拿到了 Token：
 
 ```bash
-sudo docker compose --profile telegram exec telegram-worker \
+sudo docker compose --profile telegram exec -T telegram-worker \
   sh -lc 'test -n "$TELEGRAM_BOT_TOKEN" && echo token-set || echo token-missing'
 ```
 
@@ -369,7 +381,7 @@ POST /gateway/telegram/webhook
 ### scheduler 主动推送扩展
 
 ```text
-scheduler-worker -> outbox -> telegram-worker -> sendMessage
+scheduler-worker -> outbox -> telegram-worker -> sendMessage/sendDocument
 ```
 
 当前已经使用持久化 outbox，不依赖进程内 MessageBus 跨容器直接发送。后续可以继续增加：
@@ -400,7 +412,7 @@ git diff --check
 本次改动完成后，完整单元测试结果为：
 
 ```text
-Ran 130 tests
+Ran 132 tests
 OK
 ```
 

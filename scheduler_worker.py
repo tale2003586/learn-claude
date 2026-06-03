@@ -151,6 +151,10 @@ class TelegramScheduleNotifier:
         if not chat_ids:
             return
         text = _notification_text(schedule, result, workspace=self.workspace)
+        document_path = _report_document_path(
+            str(result.get("report_path") or ""),
+            workspace=self.workspace,
+        )
         for chat_id in chat_ids:
             self.store.enqueue_message(
                 chat_id=chat_id,
@@ -163,6 +167,22 @@ class TelegramScheduleNotifier:
                     "report_path": result.get("report_path"),
                 },
             )
+            if document_path:
+                self.store.enqueue_document(
+                    chat_id=chat_id,
+                    document_path=document_path,
+                    caption=(
+                        f"定时任务报告：{schedule.get('name', 'unnamed')}\n"
+                        f"{document_path}"
+                    ),
+                    source="scheduler",
+                    metadata={
+                        "schedule_id": schedule.get("id"),
+                        "run_id": result.get("run_id"),
+                        "status": result.get("status"),
+                        "report_path": result.get("report_path"),
+                    },
+                )
 
     @property
     def store(self):
@@ -240,6 +260,31 @@ def _report_excerpt(report_path: str, *, workspace: Path) -> str:
     if len(text) <= max_chars:
         return text
     return text[:max_chars].rstrip() + "\n\n[报告内容已截断，可到 Web 文件区查看完整报告。]"
+
+
+def _report_document_path(report_path: str, *, workspace: Path) -> str:
+    if not _env_bool("TELEGRAM_NOTIFY_SEND_REPORT_FILE", default=True):
+        return ""
+    if not report_path:
+        return ""
+    path = (workspace / report_path).resolve()
+    if not path.is_file() or not path.is_relative_to(workspace):
+        return ""
+    max_bytes = _env_int(
+        "TELEGRAM_NOTIFY_DOCUMENT_MAX_BYTES",
+        default=10 * 1024 * 1024,
+        minimum=1,
+    )
+    if path.stat().st_size > max_bytes:
+        return ""
+    return path.relative_to(workspace).as_posix()
+
+
+def _env_bool(name: str, *, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _env_int(name: str, *, default: int, minimum: int) -> int:

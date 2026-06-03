@@ -1,5 +1,6 @@
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -85,6 +86,43 @@ class TelegramGatewayStoreTests(unittest.TestCase):
 
         self.assertEqual(runtime_chat_id, "tg_123_default")
         self.assertEqual(external_chat_id_from_runtime(runtime_chat_id), 123)
+
+    def test_existing_outbox_schema_is_migrated_for_documents(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "telegram.db"
+            with sqlite3.connect(db_path) as conn:
+                conn.execute(
+                    """
+                    CREATE TABLE telegram_outbox (
+                        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                        chat_id    TEXT NOT NULL,
+                        text       TEXT NOT NULL,
+                        status     TEXT NOT NULL DEFAULT 'pending',
+                        attempts   INTEGER NOT NULL DEFAULT 0,
+                        source     TEXT,
+                        metadata   TEXT NOT NULL DEFAULT '{}',
+                        error      TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        sent_at    TEXT
+                    )
+                    """
+                )
+
+            store = TelegramGatewayStore(db_path)
+            try:
+                store.enqueue_document(
+                    chat_id=123,
+                    document_path="storage/reports/daily.md",
+                    caption="daily",
+                )
+                pending = store.list_pending_messages()
+            finally:
+                store.close()
+
+        self.assertEqual("document", pending[0]["message_type"])
+        self.assertEqual("storage/reports/daily.md", pending[0]["document_path"])
+        self.assertEqual("daily", pending[0]["caption"])
 
 
 class TelegramClientTests(unittest.IsolatedAsyncioTestCase):
@@ -330,6 +368,22 @@ class TelegramGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.client.sent, [("123", "scheduled report")])
         self.assertEqual(self.store.list_pending_messages(), [])
         self.assertEqual(message_id, 1)
+
+    async def test_flush_outbox_sends_document_message(self):
+        self.store.enqueue_document(
+            chat_id=123,
+            document_path="storage/reports/daily.md",
+            caption="daily report",
+            source="scheduler",
+        )
+
+        await self.gateway.flush_outbox()
+
+        self.assertEqual(
+            self.client.documents,
+            [("123", "daily.md", "daily report")],
+        )
+        self.assertEqual(self.store.list_pending_messages(), [])
 
     async def test_files_command_lists_current_users_storage(self):
         storage = Path(".users/telegram_123/storage")

@@ -261,6 +261,8 @@ TELEGRAM_POLL_TIMEOUT=30
 TELEGRAM_RETRY_DELAY=3
 TELEGRAM_NOTIFY_CHAT_IDS=
 TELEGRAM_NOTIFY_MAX_CHARS=3500
+TELEGRAM_NOTIFY_SEND_REPORT_FILE=1
+TELEGRAM_NOTIFY_DOCUMENT_MAX_BYTES=10485760
 TELEGRAM_OUTBOX_BATCH_SIZE=10
 TELEGRAM_OUTBOX_MAX_ATTEMPTS=3
 TELEGRAM_STORAGE_PREVIEW_BYTES=8000
@@ -414,10 +416,18 @@ sudo docker compose logs -f --tail=100 telegram-worker
 scheduler-worker -> .gateway/telegram.db outbox -> telegram-worker -> Telegram
 ```
 
+默认会推送两条：
+
+```text
+1. 定时任务摘要
+2. 生成的 Markdown 报告文件
+```
+
 编辑 `.env`，显式写入你的 Telegram user ID：
 
 ```env
 TELEGRAM_NOTIFY_CHAT_IDS=123456789
+TELEGRAM_NOTIFY_SEND_REPORT_FILE=1
 ```
 
 如果留空，系统会尝试从 `TELEGRAM_USER_MAP` 的 key 和 `TELEGRAM_ALLOWED_USER_IDS` 推导通知目标；
@@ -436,6 +446,19 @@ sudo docker compose --profile telegram up -d --build --force-recreate \
 ```bash
 sudo docker compose logs -f --tail=100 scheduler-worker
 sudo docker compose logs -f --tail=100 telegram-worker
+```
+
+不想自动发送报告文件时，改成：
+
+```env
+TELEGRAM_NOTIFY_SEND_REPORT_FILE=0
+```
+
+然后重新创建：
+
+```bash
+sudo docker compose --profile telegram up -d --force-recreate \
+  scheduler-worker telegram-worker
 ```
 
 ### 11.2 在 Telegram 查看 storage 文件
@@ -857,7 +880,7 @@ sudo docker compose logs --tail=100 telegram-worker
 检查 outbox 是否有待发送消息：
 
 ```bash
-sudo docker compose --profile telegram exec telegram-worker \
+sudo docker compose --profile telegram exec -T telegram-worker \
   python - <<'PY'
 from gateway.telegram.store import TelegramGatewayStore
 store = TelegramGatewayStore()
