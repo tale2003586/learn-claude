@@ -1,11 +1,13 @@
 import os
 from pathlib import Path
-from openai import OpenAI
 from dotenv import load_dotenv
 
+from core.model_pool import build_model_pool_from_env
 from skill_runtime import SKILL_LOADER
 
 load_dotenv(override=True)
+
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "deepseek").strip().lower()
 
 USE_LOCAL_PROXY = os.getenv("USE_LOCAL_PROXY", "1").lower() not in {"0", "false", "no"}
 if USE_LOCAL_PROXY:
@@ -20,12 +22,14 @@ else:
 os.environ.pop("ALL_PROXY", None)
 os.environ.pop("all_proxy", None)
 
-client = OpenAI(
-    api_key=os.environ["DEEPSEEK_API_KEY"],
-    base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-)
 
-MODEL = "deepseek-v4-flash"
+MODEL_POOL = build_model_pool_from_env()
+MODEL = MODEL_POOL.model_for("chat")
+MAX_TOKENS_PARAM = MODEL_POOL.profile_for("chat").max_tokens_param
+client = MODEL_POOL.client_for_purpose("chat")
+REFLECTION_ENABLED = os.getenv("REFLECTION_ENABLED", "0").lower() in {"1", "true", "yes"}
+REFLECTION_MAX_TOKENS = int(os.getenv("REFLECTION_MAX_TOKENS", "500"))
+REFLECTION_MIN_REASONING_STEPS = int(os.getenv("REFLECTION_MIN_REASONING_STEPS", "6"))
 WORKDIR = Path.cwd() 
 
 SKILLS_DIR = WORKDIR / "skills"

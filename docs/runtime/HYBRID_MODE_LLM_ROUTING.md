@@ -151,3 +151,72 @@ tests/test_hybrid_mode_routing.py
 缺少分类器时回落 Bot
 分类器可以解析 JSON 输出
 ```
+
+## 九、路由决策升级
+
+Hybrid 路由现在不只返回 `BOT_PROFILE` 或 `CODING_PROFILE`，还会记录一次可解释的路由决策：
+
+```python
+RouteResult(
+    profile=...,
+    intent="scheduler|storage_file|memory_query|coding|chat|mode_switch",
+    execution="pipeline_bot|task_session|direct_reply",
+    confidence=0.88,
+    reason="..."
+)
+```
+
+每次路由后，`session.metadata["last_route"]` 会保存：
+
+```json
+{
+  "intent": "scheduler",
+  "execution": "pipeline_bot",
+  "profile": "bot",
+  "tool_mode": "bot",
+  "confidence": 0.88,
+  "reason": "Request refers to scheduled or immediate task execution.",
+  "switched": false
+}
+```
+
+### 优先级
+
+Hybrid 模式的候选顺序：
+
+```text
+1. 强 Coding 信号
+   例如：修改 gateway/telegram/storage.py 并运行测试
+
+2. Scheduler 意图
+   例如：创建定时任务、立即运行一次当前任务、生成日报
+
+3. Storage 文件意图
+   例如：列出 storage、下载报告文件、预览文件
+
+4. Memory 意图
+   例如：你记得我之前说过什么、总结当前记忆系统
+
+5. 普通 Coding 候选
+   命中关键词后再交给 HybridModeClassifier
+
+6. 默认 Bot
+```
+
+Scheduler、Storage、Memory 请求会留在 `BOT_PROFILE`，由对应工具在 Bot 模式下处理，避免因为
+“运行”“文件”“测试”等词误切到 Coding TaskSession。
+
+如果会话旧状态停在 `coding`，但当前用户不再具备 admin 权限，路由器会把 `current_mode`
+退回 `bot`，避免界面状态和实际权限不一致。
+
+### 新增测试
+
+`tests/test_hybrid_mode_routing.py` 现在额外覆盖：
+
+```text
+Scheduler 请求留在 Bot，并跳过 Coding classifier
+Storage 请求留在 Bot，并跳过 Coding classifier
+包含 storage.py 这类文件名的真实代码请求仍可进入 Coding
+路由结果写入 session.metadata["last_route"]
+权限撤销后，旧 Coding 会话自动回到 Bot
+```

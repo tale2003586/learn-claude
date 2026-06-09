@@ -5,9 +5,7 @@
 本文记录受审批定时 Agent 的第 1 阶段：扩展 SQLite 存储结构和兼容迁移。
 后续自主执行链路已经完成，见：
 
-```text
-docs/SCHEDULED_AGENT_AUTONOMOUS_EXECUTION.md
-```
+[SCHEDULED_AGENT_AUTONOMOUS_EXECUTION.md](SCHEDULED_AGENT_AUTONOMOUS_EXECUTION.md)
 
 现有定时搜索与受控 Workflow 的运行逻辑保持不变：
 

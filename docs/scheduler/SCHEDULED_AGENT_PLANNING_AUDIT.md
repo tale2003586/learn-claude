@@ -12,9 +12,7 @@ ToolRegistry.catalog()
 
 后续阶段已经接入自主 Agent 执行。本文聚焦 Planner 与 Auditor；完整执行链路见：
 
-```text
-docs/SCHEDULED_AGENT_AUTONOMOUS_EXECUTION.md
-```
+[SCHEDULED_AGENT_AUTONOMOUS_EXECUTION.md](SCHEDULED_AGENT_AUTONOMOUS_EXECUTION.md)
 
 ## 二、目标
 

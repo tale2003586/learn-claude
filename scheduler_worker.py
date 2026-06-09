@@ -3,6 +3,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from gateway.feishu.store import FeishuGatewayStore
 from gateway.telegram.store import TelegramGatewayStore
 from plugins.scheduler.reports import ScheduledReportService
 from plugins.scheduler.store import ScheduleStore
@@ -24,7 +25,10 @@ class SchedulerWorker:
         self.reports = reports or ScheduledReportService(store=self.store)
         self.agent_runner = agent_runner
         self.agent_runner_factory = agent_runner_factory or _build_agent_runner
-        self.notifier = notifier if notifier is not None else TelegramScheduleNotifier()
+        self.notifier = notifier if notifier is not None else CompositeScheduleNotifier([
+            TelegramScheduleNotifier(),
+            FeishuScheduleNotifier(),
+        ])
         if scheduler is None or cron_trigger is None:
             try:
                 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -136,6 +140,15 @@ def _build_agent_runner():
     raise RuntimeError("Scheduled agent runner could not be initialized.")
 
 
+class CompositeScheduleNotifier:
+    def __init__(self, notifiers: list) -> None:
+        self.notifiers = list(notifiers)
+
+    def notify(self, schedule: dict, result: dict) -> None:
+        for notifier in self.notifiers:
+            notifier.notify(schedule, result)
+
+
 class TelegramScheduleNotifier:
     def __init__(
         self,
@@ -150,10 +163,17 @@ class TelegramScheduleNotifier:
         chat_ids = _notification_chat_ids()
         if not chat_ids:
             return
-        text = _notification_text(schedule, result, workspace=self.workspace)
+        text = _notification_text(
+            schedule,
+            result,
+            workspace=self.workspace,
+            max_chars_env="TELEGRAM_NOTIFY_MAX_CHARS",
+        )
         document_path = _report_document_path(
             str(result.get("report_path") or ""),
             workspace=self.workspace,
+            send_file_env="TELEGRAM_NOTIFY_SEND_REPORT_FILE",
+            max_bytes_env="TELEGRAM_NOTIFY_DOCUMENT_MAX_BYTES",
         )
         for chat_id in chat_ids:
             self.store.enqueue_message(
@@ -191,6 +211,68 @@ class TelegramScheduleNotifier:
         return self._store
 
 
+class FeishuScheduleNotifier:
+    def __init__(
+        self,
+        *,
+        store=None,
+        workspace: str | Path | None = None,
+    ) -> None:
+        self.workspace = Path(workspace or Path.cwd()).resolve()
+        self._store = store
+
+    def notify(self, schedule: dict, result: dict) -> None:
+        chat_ids = _feishu_notification_chat_ids()
+        if not chat_ids:
+            return
+        text = _notification_text(
+            schedule,
+            result,
+            workspace=self.workspace,
+            max_chars_env="FEISHU_NOTIFY_MAX_CHARS",
+        )
+        document_path = _report_document_path(
+            str(result.get("report_path") or ""),
+            workspace=self.workspace,
+            send_file_env="FEISHU_NOTIFY_SEND_REPORT_FILE",
+            max_bytes_env="FEISHU_NOTIFY_DOCUMENT_MAX_BYTES",
+        )
+        for chat_id in chat_ids:
+            self.store.enqueue_message(
+                chat_id=chat_id,
+                text=text,
+                source="scheduler",
+                metadata={
+                    "schedule_id": schedule.get("id"),
+                    "run_id": result.get("run_id"),
+                    "status": result.get("status"),
+                    "report_path": result.get("report_path"),
+                },
+            )
+            if document_path:
+                self.store.enqueue_document(
+                    chat_id=chat_id,
+                    document_path=document_path,
+                    caption=(
+                        f"定时任务报告：{schedule.get('name', 'unnamed')}\n"
+                        f"{document_path}"
+                    ),
+                    source="scheduler",
+                    metadata={
+                        "schedule_id": schedule.get("id"),
+                        "run_id": result.get("run_id"),
+                        "status": result.get("status"),
+                        "report_path": result.get("report_path"),
+                    },
+                )
+
+    @property
+    def store(self):
+        if self._store is None:
+            self._store = FeishuGatewayStore(self.workspace / ".gateway" / "feishu.db")
+        return self._store
+
+
 def _notification_chat_ids() -> list[int]:
     explicit = os.environ.get("TELEGRAM_NOTIFY_CHAT_IDS", "").strip()
     if explicit:
@@ -217,6 +299,20 @@ def _notification_chat_ids() -> list[int]:
     return result
 
 
+def _feishu_notification_chat_ids() -> list[str]:
+    explicit = os.environ.get("FEISHU_NOTIFY_CHAT_IDS", "").strip()
+    if not explicit:
+        return []
+    seen = set()
+    result = []
+    for item in explicit.split(","):
+        cleaned = item.strip()
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            result.append(cleaned)
+    return result
+
+
 def _parse_int_list(value: str, *, allow_star: bool) -> list[int]:
     result = []
     for item in str(value or "").split(","):
@@ -232,7 +328,13 @@ def _parse_int_list(value: str, *, allow_star: bool) -> list[int]:
     return result
 
 
-def _notification_text(schedule: dict, result: dict, *, workspace: Path) -> str:
+def _notification_text(
+    schedule: dict,
+    result: dict,
+    *,
+    workspace: Path,
+    max_chars_env: str,
+) -> str:
     status = result.get("status", "unknown")
     report_path = str(result.get("report_path") or "")
     lines = [
@@ -243,27 +345,33 @@ def _notification_text(schedule: dict, result: dict, *, workspace: Path) -> str:
         lines.append(f"错误：{result['error']}")
     if report_path:
         lines.append(f"报告：{report_path}")
-    content = _report_excerpt(report_path, workspace=workspace)
+    content = _report_excerpt(report_path, workspace=workspace, max_chars_env=max_chars_env)
     if content:
         lines.extend(["", content])
     return "\n".join(lines).strip()
 
 
-def _report_excerpt(report_path: str, *, workspace: Path) -> str:
+def _report_excerpt(report_path: str, *, workspace: Path, max_chars_env: str) -> str:
     if not report_path:
         return ""
     path = (workspace / report_path).resolve()
     if not path.is_file() or not path.is_relative_to(workspace):
         return ""
-    max_chars = _env_int("TELEGRAM_NOTIFY_MAX_CHARS", default=3500, minimum=500)
+    max_chars = _env_int(max_chars_env, default=3500, minimum=500)
     text = path.read_text(encoding="utf-8", errors="replace").strip()
     if len(text) <= max_chars:
         return text
     return text[:max_chars].rstrip() + "\n\n[报告内容已截断，可到 Web 文件区查看完整报告。]"
 
 
-def _report_document_path(report_path: str, *, workspace: Path) -> str:
-    if not _env_bool("TELEGRAM_NOTIFY_SEND_REPORT_FILE", default=True):
+def _report_document_path(
+    report_path: str,
+    *,
+    workspace: Path,
+    send_file_env: str,
+    max_bytes_env: str,
+) -> str:
+    if not _env_bool(send_file_env, default=True):
         return ""
     if not report_path:
         return ""
@@ -271,7 +379,7 @@ def _report_document_path(report_path: str, *, workspace: Path) -> str:
     if not path.is_file() or not path.is_relative_to(workspace):
         return ""
     max_bytes = _env_int(
-        "TELEGRAM_NOTIFY_DOCUMENT_MAX_BYTES",
+        max_bytes_env,
         default=10 * 1024 * 1024,
         minimum=1,
     )

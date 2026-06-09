@@ -18,8 +18,9 @@ class LLMResponse:
 
 
 class OpenAICompatibleProvider:
-    def __init__(self, client) -> None:
+    def __init__(self, client, *, max_tokens_param: str = "max_tokens") -> None:
         self.client = client
+        self.max_tokens_param = max_tokens_param or "max_tokens"
 
     def chat(
         self,
@@ -33,7 +34,7 @@ class OpenAICompatibleProvider:
         request = {
             "model": model,
             "messages": messages,
-            "max_tokens": max_tokens,
+            self.max_tokens_param: max_tokens,
         }
         if tools:
             request["tools"] = tools
@@ -76,7 +77,7 @@ class OpenAICompatibleProvider:
         request = {
             "model": model,
             "messages": messages,
-            "max_tokens": max_tokens,
+            self.max_tokens_param: max_tokens,
             "stream": True,
         }
         if tools:

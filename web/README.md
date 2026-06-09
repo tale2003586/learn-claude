@@ -4,9 +4,9 @@
 
 推荐部署方式：Docker Compose + Nginx + HTTPS。
 
-新的首尔 Ubuntu 服务器从零部署见：[首尔服务器完整部署手册](../docs/SEOUL_SERVER_DEPLOYMENT.md)。
+新的首尔 Ubuntu 服务器从零部署见：[首尔服务器完整部署手册](../docs/deployment/SEOUL_SERVER_DEPLOYMENT.md)。
 
-Telegram 私聊接入见：[Telegram Gateway 部署说明](../docs/TELEGRAM_GATEWAY.md)。
+Telegram 私聊接入见：[Telegram Gateway 部署说明](../docs/gateways/TELEGRAM_GATEWAY.md)。
 
 ## 0. 功能和快捷键
 
@@ -45,8 +45,10 @@ cp .env.example .env
 编辑 `.env`：
 
 ```bash
+LLM_PROVIDER=deepseek
 DEEPSEEK_API_KEY=你的 key
 DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-v4-flash
 USE_LOCAL_PROXY=0
 WEB_USERNAME=agent
 WEB_PASSWORD=换成强密码
@@ -184,8 +186,10 @@ nano .env
 示例：
 
 ```bash
+LLM_PROVIDER=deepseek
 DEEPSEEK_API_KEY=sk-xxxx
 DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-v4-flash
 USE_LOCAL_PROXY=0
 WEB_USERNAME=agent
 WEB_PASSWORD=一段很长的随机密码
@@ -205,7 +209,12 @@ TASK_SANDBOX_TTL_HOURS=168
 
 说明：
 
-- `DEEPSEEK_API_KEY` 必填。
+- 默认使用 DeepSeek；`DEEPSEEK_API_KEY` 必填。
+- 要使用小米 MiMo，改成 `LLM_PROVIDER=mimo`、`MIMO_API_KEY=...`、
+  `MIMO_BASE_URL=https://api.xiaomimimo.com/v1`、`MIMO_MODEL=mimo-v2.5-pro`。
+- 要同时接入多个模型，可以保留 `LLM_PROVIDER=deepseek` 作为默认模型，再添加
+  `MIMO_API_KEY` 并配置 `LLM_ROUTE_*`。详细配置见
+  [MODEL_PROVIDER_POOL_ROUTING.md](../docs/runtime/MODEL_PROVIDER_POOL_ROUTING.md)。
 - `USE_LOCAL_PROXY=0` 适合云服务器；本地开发如果要走代理，可以设为 `1`。
 - 浏览器使用 `/login` 页面登录，不再弹出浏览器原生认证框。
 - 多用户部署用 `WEB_USERS_JSON` 替代 `WEB_USERNAME` 和 `WEB_PASSWORD`。不要同时保留两套配置。
@@ -502,7 +511,7 @@ sudo journalctl -u nginx -f
 ```bash
 curl -u agent:你的密码 http://127.0.0.1:8000/api/runtime-health
 docker compose logs -f --tail=200
-docker compose exec agent-console env | grep -E 'DEEPSEEK|USE_LOCAL_PROXY|WEB_'
+docker compose exec agent-console env | grep -E 'LLM|MIMO|DEEPSEEK|USE_LOCAL_PROXY|WEB_'
 ```
 
 再测一个不会调用模型的命令：
@@ -518,7 +527,8 @@ curl -u agent:你的密码 \
 
 - `DEEPSEEK_API_KEY` 错了或没传进容器。
 - `DEEPSEEK_BASE_URL` 写错。
-- 云服务器访问不了 `https://api.deepseek.com`。
+- MiMo 模式下 `MIMO_API_KEY`、`MIMO_BASE_URL` 或 `MIMO_MODEL` 写错。
+- 云服务器访问不了当前模型服务地址，例如 `https://api.deepseek.com` 或 `https://api.xiaomimimo.com`。
 - `USE_LOCAL_PROXY` 仍是 `1`，导致容器去连不存在的 `127.0.0.1:7897`。
 
 云服务器建议：

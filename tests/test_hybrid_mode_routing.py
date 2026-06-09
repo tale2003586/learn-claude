@@ -34,14 +34,70 @@ class ModeRouterHybridClassificationTests(unittest.TestCase):
     def test_classifier_can_accept_real_coding_request(self) -> None:
         classifier = RecordingClassifier(True)
         router = ModeRouter(hybrid_classifier=classifier)
+        session = Session(id="web:default")
 
         route = router.route(
-            Session(id="web:default"),
+            session,
             "请修改 Python 文件并运行测试",
         )
 
         self.assertIs(CODING_PROFILE, route.profile)
+        self.assertEqual("coding", route.intent)
+        self.assertEqual("task_session", route.execution)
+        self.assertEqual("coding", session.metadata["last_route"]["intent"])
         self.assertEqual(["请修改 Python 文件并运行测试"], classifier.calls)
+
+    def test_scheduler_request_stays_in_bot_and_skips_classifier(self) -> None:
+        classifier = RecordingClassifier(True)
+        session = Session(id="web:default")
+
+        route = ModeRouter(hybrid_classifier=classifier).route(
+            session,
+            "请立即运行一次当前任务并把日报发给我",
+        )
+
+        self.assertIs(BOT_PROFILE, route.profile)
+        self.assertEqual("scheduler", route.intent)
+        self.assertEqual("pipeline_bot", route.execution)
+        self.assertEqual([], classifier.calls)
+        self.assertEqual("scheduler", session.metadata["last_route"]["intent"])
+
+    def test_storage_request_stays_in_bot_and_skips_classifier(self) -> None:
+        classifier = RecordingClassifier(True)
+
+        route = ModeRouter(hybrid_classifier=classifier).route(
+            Session(id="web:default"),
+            "帮我下载 storage 里的报告文件",
+        )
+
+        self.assertIs(BOT_PROFILE, route.profile)
+        self.assertEqual("storage_file", route.intent)
+        self.assertEqual([], classifier.calls)
+
+    def test_revoked_admin_session_leaves_coding_mode(self) -> None:
+        session = Session(
+            id="web:guest",
+            current_mode="coding",
+            metadata={"user_role": "user"},
+        )
+
+        route = ModeRouter().route(session, "继续修改代码")
+
+        self.assertIs(BOT_PROFILE, route.profile)
+        self.assertEqual("bot", session.current_mode)
+        self.assertEqual("chat", route.intent)
+
+    def test_code_file_with_storage_name_still_uses_coding_candidate(self) -> None:
+        classifier = RecordingClassifier(True)
+
+        route = ModeRouter(hybrid_classifier=classifier).route(
+            Session(id="web:default"),
+            "请修改 gateway/telegram/storage.py 并运行测试",
+        )
+
+        self.assertIs(CODING_PROFILE, route.profile)
+        self.assertEqual("coding", route.intent)
+        self.assertEqual(["请修改 gateway/telegram/storage.py 并运行测试"], classifier.calls)
 
     def test_non_candidate_skips_classifier(self) -> None:
         classifier = RecordingClassifier(True)

@@ -30,6 +30,21 @@ PRELOADED_TOOLS_BY_MODE = {
         "read_inbox",
         "compact",
     },
+    "teammate": {
+        "read_file",
+        "load_skill",
+        "task_create",
+        "task_update",
+        "task_list",
+        "task_get",
+        "claim_task",
+        "check_background",
+        "send_message",
+        "read_inbox",
+        "idle",
+        "shutdown_response",
+        "plan_approval_request",
+    },
 }
 
 DEFERRED_TOOLS = {
@@ -270,14 +285,17 @@ class ToolRegistry:
         return "\n".join(lines)
 
 
-from .schema import LEAD_TOOLS
-from .handlers import make_lead_handlers
-from coding_runtime.teammate import TEAM
+from .schema import LEAD_TOOLS, SEARCH_TOOLS, TEAMMATE_TOOLS
+from .handlers import make_lead_handlers, make_teammate_handlers
 
 
-def build_lead_tool_registry() -> ToolRegistry:
+def build_lead_tool_registry(team=None) -> ToolRegistry:
     registry = ToolRegistry()
-    handlers = make_lead_handlers(TEAM)
+    if team is None:
+        from coding_runtime.teammate import TEAM
+
+        team = TEAM
+    handlers = make_lead_handlers(team)
 
     for schema in LEAD_TOOLS:
         name = schema["function"]["name"]
@@ -291,6 +309,26 @@ def build_lead_tool_registry() -> ToolRegistry:
             risk=_risk_for_tool(name),
             enabled_modes=_modes_for_tool(name),
             source="lead",
+        )
+
+    return registry
+
+
+def build_teammate_tool_registry(name: str) -> ToolRegistry:
+    registry = ToolRegistry()
+    handlers = make_teammate_handlers(name)
+
+    for schema in TEAMMATE_TOOLS + SEARCH_TOOLS:
+        tool_name = schema["function"]["name"]
+        handler = handlers.get(tool_name)
+        if handler is None and tool_name != "tool_search":
+            continue
+        registry.register(
+            schema,
+            handler or (lambda **kw: "tool_search is handled by ToolRegistry."),
+            risk=_risk_for_tool(tool_name),
+            enabled_modes=_modes_for_tool(tool_name),
+            source=f"teammate:{name}",
         )
 
     return registry
@@ -340,6 +378,26 @@ def _modes_for_tool(name: str) -> set[str]:
         "plan_approval",
     }
 
+    teammate_tools = {
+        "bash",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "load_skill",
+        "task_create",
+        "task_update",
+        "task_list",
+        "task_get",
+        "claim_task",
+        "background_run",
+        "check_background",
+        "send_message",
+        "read_inbox",
+        "idle",
+        "shutdown_response",
+        "plan_approval_request",
+    }
+
     bot_tools = {
         "load_skill",
         "storage_list_files",
@@ -354,6 +412,8 @@ def _modes_for_tool(name: str) -> set[str]:
     enabled = set()
     if name in coding_tools:
         enabled.add("coding")
+    if name in teammate_tools:
+        enabled.add("teammate")
     if name in bot_tools:
         enabled.add("bot")
     if name in {
@@ -367,5 +427,5 @@ def _modes_for_tool(name: str) -> set[str]:
     }:
         enabled.add("coding")
     if name in {"memorize", "recall_memory", "tool_search"}:
-        enabled.update({"bot", "coding"})
+        enabled.update({"bot", "coding", "teammate"})
     return enabled

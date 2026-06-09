@@ -40,9 +40,13 @@ class ScheduledAgentRunner:
             sessions,
             root=self.workspace / ".task_sessions",
         )
+        conclusion_provider, conclusion_model = _pipeline_model_for(
+            base_pipeline,
+            "task_conclusion",
+        )
         self.conclusion_extractor = conclusion_extractor or TaskConclusionExtractor(
-            provider=base_pipeline.provider,
-            model=base_pipeline.model,
+            provider=conclusion_provider,
+            model=conclusion_model,
         )
         self.promoter = promoter or TaskMemoryPromoter(global_memory)
         self.artifact_writer = artifact_writer or TaskArtifactWriter()
@@ -226,6 +230,7 @@ class ScheduledAgentRunner:
             ]),
             context_builder=ContextBuilder(memory_store=task_memory),
             memory_lifecycle=TaskMemoryLifecycle(task_memory),
+            model_pool=getattr(self.base_pipeline, "model_pool", None),
             max_tokens=self.base_pipeline.max_tokens,
             max_reasoning_steps=getattr(
                 self.base_pipeline,
@@ -326,6 +331,13 @@ def _tool_trace(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for message in messages
         if message.get("role") == "tool"
     ]
+
+
+def _pipeline_model_for(pipeline: Pipeline, purpose: str):
+    model_pool = getattr(pipeline, "model_pool", None)
+    if model_pool is None:
+        return pipeline.provider, pipeline.model
+    return model_pool.routed_provider(purpose), model_pool.model_for(purpose)
 
 
 def _portable_path(path: Path, workspace: Path) -> str:

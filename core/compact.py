@@ -1,17 +1,12 @@
 import json
 import time
 
-from config import client, MODEL, WORKDIR
+from config import MODEL_POOL, WORKDIR
 from config import KEEP_RECENT, PRESERVE_RESULT_TOOLS, TRANSCRIPT_DIR
 
 
 def micro_compact(messages: list) -> list:
-    """Compact message history by summarizing older messages.
-    
-    - Keeps the last 6 messages in full detail.
-    - Summarizes earlier messages into a single summary message.
-    - Reduces token count while preserving context.
-    """
+
     tool_results = []
 
     for msg_idx, msg in enumerate(messages):
@@ -43,7 +38,6 @@ def micro_compact(messages: list) -> list:
     return messages
 
 def auto_compact(messages:list) -> list:
-    """Automatically compact messages if token count exceeds threshold."""
     # This is a placeholder. In practice, you'd calculate token count and call micro_compact as needed.
     TRANSCRIPT_DIR.mkdir(exist_ok=True)
     transcript_path = TRANSCRIPT_DIR / f"transcript_{int(time.time())}.jsonl"
@@ -53,16 +47,19 @@ def auto_compact(messages:list) -> list:
     print(f"[transcript saved: {transcript_path}]")
     conversation_text = json.dumps(messages, default=str)[-80000:]
 
-    response = client.chat.completions.create(
-        model=MODEL,
+    provider = MODEL_POOL.routed_provider("compact")
+    response = provider.chat(
+        model=MODEL_POOL.model_for("compact"),
         messages=[{"role": "user", "content":
             "Summarize this conversation for continuity. Include: "
             "1) What was accomplished, 2) Current state, 3) Key decisions made. "
             "Be concise but preserve critical details.\n\n" + conversation_text}],
+        tools=[],
+        tool_choice="none",
         max_tokens=2000,
     )
 
-    summary = response.choices[0].message.content or ""
+    summary = response.content or ""
 
     if not summary:
         summary = "No summary generated."

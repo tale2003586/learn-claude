@@ -1,6 +1,6 @@
 # Telegram Gateway
 
-新服务器从零部署见：[首尔服务器完整部署手册](SEOUL_SERVER_DEPLOYMENT.md)。
+新服务器从零部署见：[首尔服务器完整部署手册](../deployment/SEOUL_SERVER_DEPLOYMENT.md)。
 
 ## 目标
 

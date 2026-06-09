@@ -87,15 +87,20 @@ def preview_storage_text(
     return f"storage/{_display_path(path, root)}\n\n{text}{suffix}"
 
 
-def resolve_download_path(user_id: str, relative_path: str) -> Path:
+def resolve_download_path(
+    user_id: str,
+    relative_path: str,
+    *,
+    max_bytes: int | None = None,
+) -> Path:
     path = _safe_storage_path(user_id, relative_path)
-    max_bytes = _env_int("TELEGRAM_STORAGE_DOWNLOAD_MAX_BYTES", 10 * 1024 * 1024)
+    limit = max_bytes or _env_int("TELEGRAM_STORAGE_DOWNLOAD_MAX_BYTES", 10 * 1024 * 1024)
     if not path.exists():
         raise FileNotFoundError("文件不存在。")
     if not path.is_file():
         raise IsADirectoryError("目录不能下载。")
-    if path.stat().st_size > max_bytes:
-        raise ValueError(f"文件超过下载限制：{_format_size(max_bytes)}。")
+    if path.stat().st_size > limit:
+        raise ValueError(f"文件超过下载限制：{_format_size(limit)}。")
     return path
 
 

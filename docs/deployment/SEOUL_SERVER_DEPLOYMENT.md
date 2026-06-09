@@ -47,7 +47,7 @@ Telegram 使用 `getUpdates` 长轮询，只需要服务器可以向外访问
 | 公网 IP | `203.0.113.10` | SSH 和无域名访问 |
 | SSH 用户 | `ubuntu` | 登录服务器 |
 | Git 仓库 | `https://github.com/tale2003586/learn-claude.git` | 拉取代码 |
-| DeepSeek API Key | `sk-...` | Agent 模型调用 |
+| 模型 API Key | `sk-...` | Agent 模型调用，DeepSeek 或 MiMo 均可 |
 | 管理员密码 | 自行生成强密码 | Web 管理员登录 |
 | Tavily API Key | 可选 | Web search 插件 |
 | Telegram Bot Token | 可选 | Telegram Gateway |
@@ -207,8 +207,10 @@ nano .env
 先填写：
 
 ```env
+LLM_PROVIDER=deepseek
 DEEPSEEK_API_KEY=替换为你的DeepSeekKey
 DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-v4-flash
 USE_LOCAL_PROXY=0
 
 WEB_USERS_JSON={"admin":{"password":"替换为管理员强密码","role":"admin"}}
@@ -230,6 +232,66 @@ SCHEDULER_TIMEZONE=Asia/Shanghai
 - 配置 HTTPS 之前保持 `WEB_COOKIE_SECURE=0`。
 - 服务器物理位置不会决定日报时间。按北京时间执行时使用 `Asia/Shanghai`；按韩国时间执行时
   改成 `Asia/Seoul`。
+- 默认主模型使用 DeepSeek。要切到小米 MiMo，见下一节。
+
+### 8.1.1 使用小米 MiMo 模型
+
+MiMo 提供 OpenAI 兼容接口。把 `.env` 中模型配置改成：
+
+```env
+LLM_PROVIDER=mimo
+MIMO_API_KEY=替换为你的小米MiMoKey
+MIMO_BASE_URL=https://api.xiaomimimo.com/v1
+MIMO_MODEL=mimo-v2.5-pro
+LLM_MAX_TOKENS_PARAM=max_completion_tokens
+USE_LOCAL_PROXY=0
+```
+
+也可以使用通用变量：
+
+```env
+LLM_PROVIDER=mimo
+LLM_API_KEY=替换为你的小米MiMoKey
+LLM_BASE_URL=https://api.xiaomimimo.com/v1
+LLM_MODEL=mimo-v2.5-pro
+LLM_MAX_TOKENS_PARAM=max_completion_tokens
+```
+
+切换模型后重新创建会调用模型的容器：
+
+```bash
+sudo docker compose --profile telegram up -d --build --force-recreate \
+  agent-console scheduler-worker telegram-worker
+```
+
+### 8.1.2 使用多模型 Provider 池
+
+如果你想让普通聊天、代码模式、总结、定时任务分析分别走不同模型，可以同时配置多个
+provider。示例：
+
+```env
+LLM_PROVIDER=deepseek
+DEEPSEEK_API_KEY=替换为你的DeepSeekKey
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-v4-flash
+
+MIMO_API_KEY=替换为你的小米MiMoKey
+MIMO_BASE_URL=https://api.xiaomimimo.com/v1
+MIMO_MODEL=mimo-v2.5-pro
+
+LLM_ROUTE_CHAT=deepseek
+LLM_ROUTE_CODING=deepseek
+LLM_ROUTE_HYBRID=deepseek
+LLM_ROUTE_SUMMARY=mimo,deepseek
+LLM_ROUTE_COMPACT=mimo,deepseek
+LLM_ROUTE_SCHEDULER_PLAN=deepseek
+LLM_ROUTE_SCHEDULER_ANALYZE=mimo,deepseek
+LLM_ROUTE_TASK_CONCLUSION=mimo,deepseek
+LLM_ROUTE_FALLBACK=deepseek
+```
+
+逗号表示 fallback 顺序，例如 `mimo,deepseek` 是先用 MiMo，失败后换 DeepSeek。
+完整说明见 [MODEL_PROVIDER_POOL_ROUTING.md](../runtime/MODEL_PROVIDER_POOL_ROUTING.md)。
 
 不要同时保留旧的：
 

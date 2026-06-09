@@ -255,12 +255,18 @@ class LLMTaskPlanningClient:
     def _provider_and_model(self):
         if self.provider is not None and self.model:
             return self.provider, self.model
-        from config import MODEL, client
-        from core.provider import OpenAICompatibleProvider
+        if self.provider is not None:
+            from config import MODEL
+
+            return self.provider, self.model or os.environ.get("SCHEDULER_PLANNER_MODEL") or MODEL
+
+        from config import MODEL_POOL
 
         return (
-            self.provider or OpenAICompatibleProvider(client),
-            self.model or os.environ.get("SCHEDULER_PLANNER_MODEL") or MODEL,
+            MODEL_POOL.routed_provider("scheduler_plan"),
+            self.model
+            or os.environ.get("SCHEDULER_PLANNER_MODEL")
+            or MODEL_POOL.model_for("scheduler_plan"),
         )
 
 
