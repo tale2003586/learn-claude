@@ -59,6 +59,7 @@ class ModelProfile:
     base_url: str
     model: str
     max_tokens_param: str = "max_tokens"
+    wire_api: str = "chat_completions"
     fallbacks: tuple[str, ...] = ()
 
 
@@ -110,6 +111,7 @@ class ModelPool:
             self._providers[profile.name] = OpenAICompatibleProvider(
                 self.client_for_profile(profile.name),
                 max_tokens_param=profile.max_tokens_param,
+                wire_api=profile.wire_api,
             )
         return self._providers[profile.name]
 
@@ -403,6 +405,19 @@ def _profile_from_mapping(
         )
         or str(default_settings.get("max_tokens_param") or "max_tokens").strip()
     )
+    wire_api = _normalize_wire_api(
+        str(raw.get("wire_api") or "").strip()
+        or _first_env(
+            env,
+            _provider_env_names(
+                profile_name,
+                provider,
+                selected_match=selected_match,
+                suffix="WIRE_API",
+            ),
+        )
+        or str(default_settings.get("wire_api") or "chat_completions").strip()
+    )
     fallbacks = _parse_profile_list(raw.get("fallbacks", ()))
 
     return ModelProfile(
@@ -412,6 +427,7 @@ def _profile_from_mapping(
         base_url=base_url,
         model=model,
         max_tokens_param=max_tokens_param,
+        wire_api=wire_api,
         fallbacks=fallbacks,
     )
 
@@ -533,6 +549,17 @@ def _normalize_profile_name(value: str) -> str:
 
 def _normalize_route_name(value: str) -> str:
     return _normalize_profile_name(value)
+
+
+def _normalize_wire_api(value: str) -> str:
+    normalized = str(value or "chat_completions").strip().lower().replace("-", "_")
+    if normalized in {"chat", "chat_completion", "chat_completions"}:
+        return "chat_completions"
+    if normalized in {"response", "responses"}:
+        return "responses"
+    raise RuntimeError(
+        "Model provider wire_api must be 'chat_completions' or 'responses'."
+    )
 
 
 def _env_prefix(value: str) -> str:

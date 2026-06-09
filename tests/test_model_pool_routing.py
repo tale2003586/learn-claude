@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from core.model_pool import ModelPool, ModelProfile, build_model_pool_from_env
 from core.pipeline import Pipeline
-from core.provider import LLMResponse
+from core.provider import LLMResponse, OpenAICompatibleProvider
 from sessions.session import Session
 from tools.executor import ToolExecutor
 
@@ -53,6 +53,36 @@ class ModelPoolEnvTests(unittest.TestCase):
 
         self.assertEqual(["mimo", "deepseek"], pool.route_profile_names("chat"))
         self.assertEqual("mimo-test", pool.model_for("chat"))
+
+    def test_profile_supports_responses_wire_api_from_env(self) -> None:
+        env = {
+            "LLM_PROVIDER": "openai_relay",
+            "OPENAI_RELAY_API_KEY": "relay-key",
+            "OPENAI_RELAY_BASE_URL": "http://relay.example",
+            "OPENAI_RELAY_MODEL": "gpt-test",
+            "OPENAI_RELAY_WIRE_API": "responses",
+        }
+
+        pool = build_model_pool_from_env(env)
+
+        self.assertEqual("responses", pool.profile_for("chat").wire_api)
+
+    def test_provider_json_supports_responses_wire_api(self) -> None:
+        env = {
+            "LLM_PROVIDER": "relay",
+            "LLM_PROVIDERS_JSON": json.dumps({
+                "relay": {
+                    "api_key": "relay-key",
+                    "base_url": "http://relay.example",
+                    "model": "gpt-test",
+                    "wire_api": "responses",
+                },
+            }),
+        }
+
+        pool = build_model_pool_from_env(env)
+
+        self.assertEqual("responses", pool.profile_for("chat").wire_api)
 
 
 class RoutedModelProviderTests(unittest.TestCase):
@@ -283,6 +313,108 @@ def _pipeline_with_pool(model_pool) -> Pipeline:
         tool_executor=ToolExecutor([]),
         context_builder=FakeContextBuilder(),
     )
+
+
+class ResponsesProviderTests(unittest.TestCase):
+    def test_responses_provider_extracts_text(self) -> None:
+        client = FakeResponsesClient(FakeResponse(
+            output=[
+                {
+                    "type": "message",
+                    "content": [
+                        {"type": "output_text", "text": "hello"},
+                    ],
+                },
+            ],
+        ))
+        provider = OpenAICompatibleProvider(client, wire_api="responses")
+
+        response = provider.chat(
+            model="gpt-test",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[],
+            tool_choice="none",
+            max_tokens=20,
+        )
+
+        self.assertEqual("hello", response.content)
+        self.assertEqual("gpt-test", client.responses.calls[0]["model"])
+        self.assertEqual(20, client.responses.calls[0]["max_output_tokens"])
+        self.assertEqual([{"role": "user", "content": "hi"}], client.responses.calls[0]["input"])
+
+    def test_responses_provider_converts_tools_and_tool_calls(self) -> None:
+        client = FakeResponsesClient(FakeResponse(
+            output=[
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "read_file",
+                    "arguments": '{"path": "README.md"}',
+                },
+            ],
+        ))
+        provider = OpenAICompatibleProvider(client, wire_api="responses")
+
+        response = provider.chat(
+            model="gpt-test",
+            messages=[
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [{
+                        "id": "call_prev",
+                        "type": "function",
+                        "function": {
+                            "name": "old_tool",
+                            "arguments": "{}",
+                        },
+                    }],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_prev",
+                    "content": "done",
+                },
+                {"role": "user", "content": "read"},
+            ],
+            tools=[{
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "description": "Read a file.",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }],
+            tool_choice="auto",
+            max_tokens=20,
+        )
+
+        self.assertEqual("read_file", response.tool_calls[0].name)
+        self.assertEqual({"path": "README.md"}, response.tool_calls[0].arguments)
+        self.assertEqual("read_file", client.responses.calls[0]["tools"][0]["name"])
+        self.assertIn("tool_calls", response.raw_message)
+
+
+class FakeResponse:
+    def __init__(self, *, output, output_text: str | None = None) -> None:
+        self.output = output
+        if output_text is not None:
+            self.output_text = output_text
+
+
+class FakeResponsesEndpoint:
+    def __init__(self, response) -> None:
+        self.response = response
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.response
+
+
+class FakeResponsesClient:
+    def __init__(self, response) -> None:
+        self.responses = FakeResponsesEndpoint(response)
 
 
 if __name__ == "__main__":

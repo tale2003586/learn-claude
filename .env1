@@ -11,13 +11,10 @@
 # Base URL 通常写到 /v1，不要写到 /v1/chat/completions。
 
 LLM_PROVIDER=openai_relay
-OPENAI_RELAY_API_KEY=replace-me
-OPENAI_RELAY_BASE_URL=https://your-relay.example.com/v1
-OPENAI_RELAY_MODEL=gpt-4o-mini
+OPENAI_RELAY_API_KEY=sk-fe4304fd80c2dcf35b01134c10fddb76017aa2f67f5475fc4d63139767a64862
+OPENAI_RELAY_BASE_URL=http://43.133.81.4
+OPENAI_RELAY_MODEL=gpt-5.5
 OPENAI_RELAY_MAX_TOKENS_PARAM=max_tokens
-# 中转站如果要求 wire_api = "responses"，这里设为 responses。
-# 普通 /v1/chat/completions 兼容服务保持 chat_completions。
-OPENAI_RELAY_WIRE_API=responses
 
 # 通用单 Provider 覆盖配置。除非你想临时覆盖当前 LLM_PROVIDER，
 # 否则保持为空即可。
@@ -31,11 +28,10 @@ DEEPSEEK_API_KEY=
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-flash
 
-MIMO_API_KEY=
+MIMO_API_KEY=sk-cagwdwi9wcttohzg6qqpsj6eyhbuzysq4bopr8v894iuwpao
 MIMO_BASE_URL=https://api.xiaomimimo.com/v1
 MIMO_MODEL=mimo-v2.5-pro
 MIMO_MAX_TOKENS_PARAM=max_completion_tokens
-MIMO_WIRE_API=chat_completions
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +55,7 @@ LLM_ROUTE_TASK_CONCLUSION=openai_relay
 LLM_ROUTE_FALLBACK=
 
 # 可选：用 JSON 配置多个 Provider profile。
-# LLM_PROVIDERS_JSON={"openai_relay":{"api_key_env":"OPENAI_RELAY_API_KEY","base_url":"https://your-relay.example.com","model":"gpt-4o-mini","wire_api":"responses"},"deepseek":{"api_key_env":"DEEPSEEK_API_KEY","base_url":"https://api.deepseek.com","model":"deepseek-v4-flash"},"mimo":{"api_key_env":"MIMO_API_KEY","base_url":"https://api.xiaomimimo.com/v1","model":"mimo-v2.5-pro","max_tokens_param":"max_completion_tokens"}}
+# LLM_PROVIDERS_JSON={"openai_relay":{"api_key_env":"OPENAI_RELAY_API_KEY","base_url":"https://your-relay.example.com/v1","model":"gpt-4o-mini"},"deepseek":{"api_key_env":"DEEPSEEK_API_KEY","base_url":"https://api.deepseek.com","model":"deepseek-v4-flash"},"mimo":{"api_key_env":"MIMO_API_KEY","base_url":"https://api.xiaomimimo.com/v1","model":"mimo-v2.5-pro","max_tokens_param":"max_completion_tokens"}}
 # LLM_ROUTES_JSON={"chat":"openai_relay","coding":"openai_relay","summary":"mimo,openai_relay","hybrid":"openai_relay","scheduler_analyze":"mimo,openai_relay"}
 
 
@@ -86,7 +82,7 @@ MARKDOWN_PDF_MAX_BYTES=2097152
 # ---------------------------------------------------------------------------
 
 WEB_USERNAME=agent
-WEB_PASSWORD=replace-with-a-strong-password
+WEB_PASSWORD=123456
 
 # 多用户部署时建议使用 WEB_USERS_JSON，并删除 WEB_USERNAME /
 # WEB_PASSWORD，避免配置含义混乱。
@@ -103,7 +99,7 @@ WEB_MAX_BODY_BYTES=52428800
 # 5. Scheduler 与插件
 # ---------------------------------------------------------------------------
 
-TAVILY_API_KEY=replace-me
+TAVILY_API_KEY=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
 
 SCHEDULER_TIMEZONE=Asia/Shanghai
 SCHEDULER_RECONCILE_SECONDS=30

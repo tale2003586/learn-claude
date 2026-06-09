@@ -267,30 +267,30 @@ sudo docker compose --profile telegram up -d --build --force-recreate \
 ### 8.1.2 使用多模型 Provider 池
 
 如果你想让普通聊天、代码模式、总结、定时任务分析分别走不同模型，可以同时配置多个
-provider。示例：
+provider。下面示例使用 OpenAI 兼容的自建 API 中转站：
 
 ```env
-LLM_PROVIDER=deepseek
-DEEPSEEK_API_KEY=替换为你的DeepSeekKey
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-v4-flash
+LLM_PROVIDER=openai_relay
+OPENAI_RELAY_API_KEY=替换为你的中转站Key
+OPENAI_RELAY_BASE_URL=http://43.133.81.4
+OPENAI_RELAY_MODEL=gpt-4o-mini
+OPENAI_RELAY_MAX_TOKENS_PARAM=max_tokens
+OPENAI_RELAY_WIRE_API=responses
 
-MIMO_API_KEY=替换为你的小米MiMoKey
-MIMO_BASE_URL=https://api.xiaomimimo.com/v1
-MIMO_MODEL=mimo-v2.5-pro
-
-LLM_ROUTE_CHAT=deepseek
-LLM_ROUTE_CODING=deepseek
-LLM_ROUTE_HYBRID=deepseek
-LLM_ROUTE_SUMMARY=mimo,deepseek
-LLM_ROUTE_COMPACT=mimo,deepseek
-LLM_ROUTE_SCHEDULER_PLAN=deepseek
-LLM_ROUTE_SCHEDULER_ANALYZE=mimo,deepseek
-LLM_ROUTE_TASK_CONCLUSION=mimo,deepseek
-LLM_ROUTE_FALLBACK=deepseek
+LLM_ROUTE_DEFAULT=openai_relay
+LLM_ROUTE_CHAT=openai_relay
+LLM_ROUTE_CODING=openai_relay
+LLM_ROUTE_HYBRID=openai_relay
+LLM_ROUTE_SUMMARY=openai_relay
+LLM_ROUTE_COMPACT=openai_relay
+LLM_ROUTE_SCHEDULER_PLAN=openai_relay
+LLM_ROUTE_SCHEDULER_ANALYZE=openai_relay
+LLM_ROUTE_TASK_CONCLUSION=openai_relay
 ```
 
-逗号表示 fallback 顺序，例如 `mimo,deepseek` 是先用 MiMo，失败后换 DeepSeek。
+如果中转站给出的配置是 `wire_api = "responses"`，按它给的 `base_url` 填写，
+通常不要手动追加 `/v1`。如果中转站使用普通 Chat Completions 协议，再把
+`OPENAI_RELAY_WIRE_API` 改成 `chat_completions`，并按中转站要求填写 `/v1` 地址。
 完整说明见 [MODEL_PROVIDER_POOL_ROUTING.md](../runtime/MODEL_PROVIDER_POOL_ROUTING.md)。
 
 不要同时保留旧的：
