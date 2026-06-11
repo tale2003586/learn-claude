@@ -10,6 +10,7 @@ __pycache__/
 .gateway/
 .users/
 .runs/
+.evals/
 storage/
 memory/RECENT_CONTEXT.json
 memory/*.md

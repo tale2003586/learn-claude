@@ -27,12 +27,19 @@ from runtime.workspace import WorkspaceResolver
 from sessions.session import Session, SessionManager
 from tools.executor import ToolExecutor
 from tools.handlers import cleanup_expired_sandboxes
-from tools.hooks import FileWriteScopeHook, ToolLoopGuardHook, ToolTraceHook
+from tools.hooks import (
+    FileWriteScopeHook,
+    ShellSafetyHook,
+    ShellWorkspaceScopeHook,
+    ToolLoopGuardHook,
+    ToolTraceHook,
+)
 from tools.tool_registry import build_lead_tool_registry
 
 
 DEFAULT_BENCHMARK_PATH = Path("benchmarks/coding_tasks.json")
 DEFAULT_EVAL_ROOT = Path(".evals/runs")
+DEFAULT_UNBOUNDED_EVAL_MAX_REASONING_STEPS = 1000
 RUNNER_MODES = {"scripted", "real"}
 
 
@@ -70,6 +77,8 @@ class CodingBenchmarkHarness:
         runner_mode: str = "scripted",
         task_id: str | None = None,
         keep_workspace: bool = False,
+        no_step_budget: bool = False,
+        max_reasoning_steps: int | None = None,
         progress: Callable[[dict[str, Any]], None] | None = None,
         plugin_manager: PluginManager | None = None,
     ) -> None:
@@ -82,6 +91,12 @@ class CodingBenchmarkHarness:
             raise ValueError(f"Unsupported runner_mode: {runner_mode}")
         self.task_id = task_id
         self.keep_workspace = bool(keep_workspace)
+        self.no_step_budget = bool(no_step_budget)
+        self.max_reasoning_steps = (
+            max(1, int(max_reasoning_steps))
+            if max_reasoning_steps is not None
+            else None
+        )
         self.progress = progress
         self.plugin_manager = plugin_manager
 
@@ -144,6 +159,8 @@ class CodingBenchmarkHarness:
                 "source": str(self.benchmark_path),
                 "task_count": len(tasks),
                 "task_id": self.task_id or "",
+                "no_step_budget": self.no_step_budget,
+                "max_reasoning_steps": self.max_reasoning_steps,
             },
             "workspace_root": str(workspaces_root),
             "workspace_retained": self.keep_workspace or not owns_workspace_root,
@@ -183,17 +200,20 @@ class CodingBenchmarkHarness:
         trace_store = TraceStore(eval_dir / "runs")
         sessions = SessionManager(eval_dir / "sessions" / f"{task.id}.db")
         provider, model = self._provider_for_task(task)
+        effective_step_budget = self._effective_step_budget(task)
         pipeline = Pipeline(
             tools=_tool_registry_for(task.allowed_tools),
             provider=provider,
             model=model,
             tool_executor=ToolExecutor([
+                ShellSafetyHook(),
+                ShellWorkspaceScopeHook(workspace),
                 FileWriteScopeHook(workspace),
                 ToolLoopGuardHook(),
                 ToolTraceHook(),
             ]),
             context_builder=ContextBuilder(memory_store=MemoryStore(eval_dir / "memory" / task.id / "task")),
-            max_reasoning_steps=task.step_budget,
+            max_reasoning_steps=effective_step_budget,
         )
         runner = TaskSessionRunner(
             sessions=sessions,
@@ -248,7 +268,11 @@ class CodingBenchmarkHarness:
 
         run_dir = trace_store.run_dir(run_state)
         verifier = verify_task(workspace=workspace, run_dir=run_dir, task=task)
-        within_budget = run_state.reasoning_steps <= task.step_budget
+        within_budget = (
+            True
+            if self.no_step_budget
+            else run_state.reasoning_steps <= effective_step_budget
+        )
         verifier_passed = bool(verifier["passed"])
         workspace_diff_passed = _checks_passed(verifier, {"modified", "created", "not_modified"})
         trace_passed = _checks_passed(verifier, {"trace_event_exists", "tool_called", "tool_denied"})
@@ -267,6 +291,8 @@ class CodingBenchmarkHarness:
             "run_dir": str(run_dir),
             "allowed_tools": task.allowed_tools,
             "step_budget": task.step_budget,
+            "effective_step_budget": None if self.no_step_budget else effective_step_budget,
+            "budget_disabled": self.no_step_budget,
             "reasoning_steps": run_state.reasoning_steps,
             "tool_calls": run_state.tool_calls,
             "within_budget": within_budget,
@@ -325,6 +351,13 @@ class CodingBenchmarkHarness:
         if self.progress is not None:
             self.progress({"event": event, **payload})
 
+    def _effective_step_budget(self, task: BenchmarkTask) -> int:
+        if self.max_reasoning_steps is not None:
+            return self.max_reasoning_steps
+        if self.no_step_budget:
+            return DEFAULT_UNBOUNDED_EVAL_MAX_REASONING_STEPS
+        return task.step_budget
+
 
 def run_coding_benchmark(
     *,
@@ -334,6 +367,8 @@ def run_coding_benchmark(
     runner_mode: str = "scripted",
     task_id: str | None = None,
     keep_workspace: bool = False,
+    no_step_budget: bool = False,
+    max_reasoning_steps: int | None = None,
     progress: Callable[[dict[str, Any]], None] | None = None,
     plugin_manager: PluginManager | None = None,
 ) -> dict[str, Any]:
@@ -344,6 +379,8 @@ def run_coding_benchmark(
         runner_mode=runner_mode,
         task_id=task_id,
         keep_workspace=keep_workspace,
+        no_step_budget=no_step_budget,
+        max_reasoning_steps=max_reasoning_steps,
         progress=progress,
         plugin_manager=plugin_manager,
     ).run()

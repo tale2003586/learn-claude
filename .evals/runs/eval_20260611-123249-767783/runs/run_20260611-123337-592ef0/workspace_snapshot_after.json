@@ -1,0 +1,19 @@
+{
+  "root": "/tmp/coding-benchmark-7vty8get/coding-fix-parser-002/coding_fix_parser",
+  "file_count": 2,
+  "files": [
+    {
+      "path": "src/parser.py",
+      "sha256": "6ad8601db39c6eb5b1bb2a446df9a6e8a370e71f90be608651a2a6a1b5a128d0",
+      "size": 85,
+      "mtime_ns": 1781181228068809543
+    },
+    {
+      "path": "tests/test_parser.py",
+      "sha256": "923c03fe0c090d7b34954fc514bfc3c062dd545c97f6e0322a0762bb07d732df",
+      "size": 289,
+      "mtime_ns": 1781090031032196264
+    }
+  ],
+  "skipped": []
+}

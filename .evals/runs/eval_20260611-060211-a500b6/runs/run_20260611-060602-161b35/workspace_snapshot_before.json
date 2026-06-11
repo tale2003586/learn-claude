@@ -1,0 +1,13 @@
+{
+  "root": "/tmp/coding-benchmark-m5qk8kvn/coding-invalid-edit-recovery-009/coding_invalid_edit",
+  "file_count": 1,
+  "files": [
+    {
+      "path": "notes.txt",
+      "sha256": "3b0e123b423829f778c0b9462081fe156c2c367cef4f23842253e961b3e938a2",
+      "size": 31,
+      "mtime_ns": 1781090031043239113
+    }
+  ],
+  "skipped": []
+}

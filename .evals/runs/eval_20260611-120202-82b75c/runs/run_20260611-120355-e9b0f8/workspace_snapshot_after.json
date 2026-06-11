@@ -1,0 +1,25 @@
+{
+  "root": "/tmp/coding-benchmark-jw4_mlk1/coding-add-feature-003/coding_add_feature",
+  "file_count": 3,
+  "files": [
+    {
+      "path": "src/string_tools.py",
+      "sha256": "d6be009bd1e30a6b3ac63ea619b592853bc539cfab5f20e5759ca5c9823c6b31",
+      "size": 129,
+      "mtime_ns": 1781179450970658703
+    },
+    {
+      "path": "tests/test_normalize_whitespace.py",
+      "sha256": "73279fcb23cb678551bba4b9ce4f5715228c5cf9d41259faa81d73885ec4bb72",
+      "size": 900,
+      "mtime_ns": 1781179450971740035
+    },
+    {
+      "path": "tests/test_string_tools.py",
+      "sha256": "698b9af7c481072f8205c107b62b36ac8562b150a7938c7213f1f5df6dc4fa6b",
+      "size": 128,
+      "mtime_ns": 1781090031032196264
+    }
+  ],
+  "skipped": []
+}

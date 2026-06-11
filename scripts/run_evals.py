@@ -52,6 +52,17 @@ def main() -> None:
         help="Keep copied fixture workspaces for debugging.",
     )
     parser.add_argument(
+        "--no-step-budget",
+        action="store_true",
+        help="Disable benchmark step-budget pass/fail checks and use a large runtime guard.",
+    )
+    parser.add_argument(
+        "--max-reasoning-steps",
+        type=int,
+        default=None,
+        help="Override the benchmark reasoning-step limit for each task.",
+    )
+    parser.add_argument(
         "--quiet",
         action="store_true",
         help="Disable line-by-line progress output.",
@@ -68,6 +79,8 @@ def main() -> None:
         runner_mode=args.runner,
         task_id=args.task_id or None,
         keep_workspace=args.keep_workspace,
+        no_step_budget=args.no_step_budget,
+        max_reasoning_steps=args.max_reasoning_steps,
         progress=None if args.quiet else render_progress,
     )
     print(json.dumps({

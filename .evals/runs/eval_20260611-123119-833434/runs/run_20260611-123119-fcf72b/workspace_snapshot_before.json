@@ -1,0 +1,19 @@
+{
+  "root": "/tmp/coding-benchmark-fcvrozoo/coding-fix-parser-002/coding_fix_parser",
+  "file_count": 2,
+  "files": [
+    {
+      "path": "src/parser.py",
+      "sha256": "1abb7a599e4a8019dbafbbd2c6e29b805935d479eff892beb96bc651672f8425",
+      "size": 82,
+      "mtime_ns": 1781090031032196264
+    },
+    {
+      "path": "tests/test_parser.py",
+      "sha256": "923c03fe0c090d7b34954fc514bfc3c062dd545c97f6e0322a0762bb07d732df",
+      "size": 289,
+      "mtime_ns": 1781090031032196264
+    }
+  ],
+  "skipped": []
+}

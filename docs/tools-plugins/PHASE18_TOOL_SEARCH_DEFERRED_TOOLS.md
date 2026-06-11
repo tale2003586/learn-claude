@@ -128,28 +128,41 @@ check_background
 compact
 ```
 
-编程模式下默认可以读文件、查任务、查后台任务、压缩上下文。
+编程模式下默认可以读文件、写文件、编辑文件、运行 shell、查任务、查后台任务、压缩上下文。
 
-但下面这些不会默认暴露：
+当前 coding 模式下这些核心工作工具会默认暴露：
 
 ```text
 bash
 write_file
 edit_file
+list_files
+read_file
+git_status
+git_diff
+git_log
+git_branch
+```
+
+但下面这些更有副作用或更偏协作编排的工具不会默认暴露：
+
+```text
 background_run
+git_add
+git_commit
 spawn_teammate
 ```
 
 模型需要先调用：
 
 ```text
-tool_search("select:bash")
+tool_search("select:git_add")
 ```
 
 然后下一次 reasoning step 才能调用：
 
 ```text
-bash(...)
+git_add(...)
 ```
 
 ### bot preloaded

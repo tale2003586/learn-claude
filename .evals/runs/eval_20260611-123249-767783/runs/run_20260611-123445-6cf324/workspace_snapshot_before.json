@@ -1,0 +1,25 @@
+{
+  "root": "/tmp/coding-benchmark-7vty8get/coding-refactor-config-004/coding_refactor_config",
+  "file_count": 3,
+  "files": [
+    {
+      "path": "app/config.py",
+      "sha256": "defb212c5d3d73180fb28c1becc48b583fba70e41b0a5ee798aa2059ebe11a85",
+      "size": 146,
+      "mtime_ns": 1781090031032196264
+    },
+    {
+      "path": "app/main.py",
+      "sha256": "9f73d7c19115c49be22913e8bfa31a80536d881f726b2e33fb6cdc94e5d9981a",
+      "size": 152,
+      "mtime_ns": 1781090031032196264
+    },
+    {
+      "path": "tests.py",
+      "sha256": "f78e38cedd97edc60613d17e67b3645a4213f6508e022d445f61083785c8a8b7",
+      "size": 108,
+      "mtime_ns": 1781090031032196264
+    }
+  ],
+  "skipped": []
+}

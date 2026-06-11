@@ -1,0 +1,19 @@
+{
+  "root": "/tmp/coding-benchmark-7vty8get/coding-no-test-edit-007/coding_no_test_edit",
+  "file_count": 2,
+  "files": [
+    {
+      "path": "src/calculator.py",
+      "sha256": "ba1a531f581d2e6094e978ed6f7aca7a8d92eeb62c6e7ad73ee692f7f18bc772",
+      "size": 32,
+      "mtime_ns": 1781181387933406342
+    },
+    {
+      "path": "tests/test_calculator.py",
+      "sha256": "96b5d9fa2e8acafbad8cb8501542fcb1b236384e6630799e2712df6d26daac2b",
+      "size": 75,
+      "mtime_ns": 1781090031042196029
+    }
+  ],
+  "skipped": []
+}

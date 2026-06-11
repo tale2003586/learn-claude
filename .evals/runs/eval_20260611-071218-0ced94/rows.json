@@ -1,0 +1,80 @@
+[
+  {
+    "id": "coding-invalid-edit-recovery-009",
+    "category": "recovery",
+    "runner_mode": "real",
+    "status": "fail",
+    "passed": false,
+    "failure_category": "verifier_failed",
+    "failure_reason": "budget_stop",
+    "prompt": "第一次编辑参数错误时要恢复，最终把 status 改为 ready。",
+    "workspace_relpath": "coding-invalid-edit-recovery-009/coding_invalid_edit",
+    "workspace_path": "/tmp/coding-benchmark-apb8alnt/coding-invalid-edit-recovery-009/coding_invalid_edit",
+    "run_id": "run_20260611-071218-b0b3ac",
+    "run_dir": ".evals/runs/eval_20260611-071218-0ced94/runs/run_20260611-071218-b0b3ac",
+    "allowed_tools": [
+      "read_file",
+      "edit_file",
+      "git_diff"
+    ],
+    "step_budget": 7,
+    "effective_step_budget": 30,
+    "budget_disabled": false,
+    "reasoning_steps": 30,
+    "tool_calls": 69,
+    "within_budget": true,
+    "verifier_passed": false,
+    "workspace_diff_passed": false,
+    "trace_passed": true,
+    "run_status": "completed",
+    "final_answer": "[TaskSession `coding-3f3ab950` completed]\n\n本轮已停止：工具推理步骤超过上限 (30)，已触发循环保护。\n\nTask log: `.task_sessions/coding-3f3ab950/TASK_LOG.md`\nConclusions: `.task_sessions/coding-3f3ab950/CONCLUSIONS.json`",
+    "error": "",
+    "verifier": {
+      "passed": false,
+      "checks": [
+        {
+          "name": "modified",
+          "path": "notes.txt",
+          "passed": false
+        },
+        {
+          "name": "file_contains",
+          "path": "notes.txt",
+          "needle": "status: ready",
+          "passed": false
+        },
+        {
+          "name": "trace_event_exists",
+          "event": "workspace.resolved",
+          "passed": true
+        },
+        {
+          "name": "trace_event_exists",
+          "event": "workspace.diff.written",
+          "passed": true
+        },
+        {
+          "name": "tool_called",
+          "tool": "edit_file",
+          "passed": true
+        },
+        {
+          "name": "run_status_completed",
+          "passed": true,
+          "status": "completed"
+        }
+      ],
+      "workspace_diff_summary": {
+        "created": 0,
+        "modified": 0,
+        "deleted": 0,
+        "before_files": 1,
+        "after_files": 1,
+        "before_skipped": 0,
+        "after_skipped": 0
+      },
+      "run_status": "completed"
+    },
+    "duration_ms": 278592.216
+  }
+]

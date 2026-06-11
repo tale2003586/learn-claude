@@ -390,6 +390,7 @@ def render_chat_markdown(text: str) -> str:
 
         _CHAT_MARKDOWN = mistune.create_markdown(
             renderer=SafeChatRenderer(escape=True),
+            plugins=["table"],
         )
     return _CHAT_MARKDOWN(text)
 

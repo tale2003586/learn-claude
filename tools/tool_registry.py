@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import json
 from typing import Callable, Any
 
 from tools.policy import (
@@ -123,6 +124,34 @@ class ToolRegistry:
     def visible_names_for_turn(self, session, mode: str = "coding") -> set[str]:
         return self.policy.visible_tools(session, mode)
 
+    def tool_catalog_text(self, session, mode: str = "coding") -> str:
+        allowed = self.policy._allowed_names(session=session, mode=mode)
+        visible = self.visible_names_for_turn(session, mode) if session is not None else set()
+        direct = sorted(name for name in visible if name in allowed)
+        deferred = sorted(name for name in allowed if name not in visible)
+
+        if not direct and not deferred:
+            return ""
+
+        lines = [
+            '<tool_catalog>',
+            "Tools are workspace-scoped when they operate on files. Use relative paths.",
+            "Call visible tools directly. Use tool_search with help:<tool_name> for parameters.",
+        ]
+        if direct:
+            lines.append("Visible now:")
+            for name in direct:
+                lines.append(f"- {name}: {self._tool_description(name)}")
+        if deferred:
+            lines.append("Available after unlock:")
+            for name in deferred:
+                lines.append(
+                    f"- {name}: {self._tool_description(name)} "
+                    f"(unlock with tool_search select:{name})"
+                )
+        lines.append("</tool_catalog>")
+        return "\n".join(lines)
+
     def reset_turn_unlocks(self, session) -> None:
         session.metadata[UNLOCKED_TOOLS_KEY] = []
 
@@ -169,8 +198,16 @@ class ToolRegistry:
     def _tool_search(self, query: str, *, session=None, mode: str = "coding") -> str:
         query = (query or "").strip()
         allowed = self.policy._allowed_names(session=session, mode=mode)
+        lowered_query = query.lower()
 
-        if query.lower().startswith("select:"):
+        if lowered_query in {"catalog", "tools", "list"}:
+            return self.tool_catalog_text(session, mode) or "No tools are available in this mode."
+
+        if lowered_query.startswith(("help:", "schema:")):
+            name = query.split(":", 1)[1].strip()
+            return self._tool_help(name, allowed=allowed, mode=mode)
+
+        if lowered_query.startswith("select:"):
             name = query.split(":", 1)[1].strip()
             if name not in self._tools:
                 return f"Unknown tool: {name}"
@@ -189,7 +226,6 @@ class ToolRegistry:
 
         visible = self.visible_names_for_turn(session, mode) if session is not None else set()
         matches = []
-        lowered_query = query.lower()
         for name, tool in self._tools.items():
             if name not in allowed:
                 continue
@@ -207,6 +243,26 @@ class ToolRegistry:
         for name, description in matches[:12]:
             lines.append(f"- {name}: {description}")
         return "\n".join(lines)
+
+    def _tool_help(self, name: str, *, allowed: set[str], mode: str) -> str:
+        if name not in self._tools:
+            return f"Unknown tool: {name}"
+        if name not in allowed:
+            return f"Tool '{name}' is not allowed in {mode} mode."
+        function = self._tools[name].schema.get("function", {})
+        parameters = function.get("parameters", {})
+        return "\n".join([
+            f"Tool: {name}",
+            f"Description: {function.get('description', '')}",
+            "Parameters:",
+            json.dumps(parameters, indent=2, ensure_ascii=False),
+        ])
+
+    def _tool_description(self, name: str) -> str:
+        tool = self._tools.get(name)
+        if tool is None:
+            return ""
+        return tool.schema["function"].get("description", "")
 
 
 from .schema import LEAD_TOOLS, SEARCH_TOOLS, TEAMMATE_TOOLS

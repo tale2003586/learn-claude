@@ -35,8 +35,10 @@ class ScriptedProvider:
     def __init__(self, responses) -> None:
         self.responses = list(responses)
         self.calls = 0
+        self.requests = []
 
     def chat(self, **kwargs):
+        self.requests.append(kwargs)
         response = self.responses[self.calls]
         self.calls += 1
         return response
@@ -75,6 +77,16 @@ def _final_response(content: str) -> LLMResponse:
     )
 
 
+def _empty_response() -> LLMResponse:
+    return LLMResponse(
+        content="",
+        raw_message={
+            "role": "assistant",
+            "content": "",
+        },
+    )
+
+
 def _registry_with_tool(
     name: str,
     *,
@@ -104,16 +116,39 @@ def _pipeline(registry, provider, *, hooks=None, max_reasoning_steps=24) -> Pipe
 
 
 class PipelineToolLoopGuardTests(unittest.TestCase):
+    def test_empty_model_response_retries_then_stops(self) -> None:
+        registry = _registry_with_tool("read_file", enabled_modes={"coding"}, always_on=True)
+        provider = ScriptedProvider([
+            _empty_response(),
+            _empty_response(),
+        ])
+        pipeline = _pipeline(registry, provider, max_reasoning_steps=4)
+        session = Session(id="task:test", current_mode="coding")
+
+        reply = pipeline.run(session, SimpleNamespace(tool_mode="coding"))
+
+        self.assertEqual(2, provider.calls)
+        self.assertIn("模型连续返回空回复", reply)
+        self.assertEqual("agent_loop_guard", session.messages[-1]["metadata"]["kind"])
+        self.assertEqual("empty_model_response", session.messages[-1]["metadata"]["reason"])
+        self.assertTrue(
+            any(
+                message.get("metadata", {}).get("reason") == "empty_model_response"
+                for message in session.messages
+                if message.get("role") == "user"
+            )
+        )
+
     def test_repeated_invisible_tool_request_stops_turn(self) -> None:
-        registry = _registry_with_tool("bash", enabled_modes={"coding"})
-        provider = RepeatingProvider("bash", {"command": "pwd"})
+        registry = _registry_with_tool("git_add", enabled_modes={"coding"})
+        provider = RepeatingProvider("git_add", {"paths": ["README.md"]})
         pipeline = _pipeline(registry, provider)
         session = Session(id="task:test", current_mode="coding")
 
         reply = pipeline.run(session, SimpleNamespace(tool_mode="coding"))
 
         self.assertEqual(2, provider.calls)
-        self.assertIn("重复请求当前不可用的工具 `bash`", reply)
+        self.assertIn("重复请求当前不可用的工具 `git_add`", reply)
         self.assertEqual("agent_loop_guard", session.messages[-1]["metadata"]["kind"])
         self.assertEqual("unavailable_tool_loop", session.messages[-1]["metadata"]["reason"])
         tool_outputs = [
@@ -125,17 +160,17 @@ class PipelineToolLoopGuardTests(unittest.TestCase):
         self.assertTrue(all("not visible in this turn" in output for output in tool_outputs))
 
     def test_tool_search_unlock_then_deferred_tool_call_still_completes(self) -> None:
-        registry = _registry_with_tool("bash", enabled_modes={"coding"})
+        registry = _registry_with_tool("git_add", enabled_modes={"coding"})
         registry.register(
             function_tool("tool_search", "search tools", {}, []),
             lambda **kwargs: "registry handles this",
             enabled_modes={"coding"},
         )
-        bash_calls = []
-        registry._tools["bash"].handler = lambda **kwargs: bash_calls.append(kwargs) or "done"
+        git_add_calls = []
+        registry._tools["git_add"].handler = lambda **kwargs: git_add_calls.append(kwargs) or "done"
         provider = ScriptedProvider([
-            _tool_response(1, "tool_search", {"query": "select:bash"}),
-            _tool_response(2, "bash", {"command": "pwd"}),
+            _tool_response(1, "tool_search", {"query": "select:git_add"}),
+            _tool_response(2, "git_add", {"paths": ["README.md"]}),
             _final_response("completed"),
         ])
         pipeline = _pipeline(registry, provider)
@@ -145,9 +180,45 @@ class PipelineToolLoopGuardTests(unittest.TestCase):
 
         self.assertEqual("completed", reply)
         self.assertEqual(3, provider.calls)
-        self.assertEqual("pwd", bash_calls[0]["command"])
-        self.assertIs(session, bash_calls[0]["_session"])
-        self.assertEqual(["bash"], session.metadata["unlocked_tools"])
+        self.assertEqual(["README.md"], git_add_calls[0]["paths"])
+        self.assertIs(session, git_add_calls[0]["_session"])
+        self.assertEqual(["git_add"], session.metadata["unlocked_tools"])
+
+    def test_tool_search_help_returns_allowed_tool_schema(self) -> None:
+        registry = _registry_with_tool("git_add", enabled_modes={"coding"})
+        registry.register(
+            function_tool("tool_search", "search tools", {}, []),
+            lambda **kwargs: "registry handles this",
+            enabled_modes={"coding"},
+        )
+        session = Session(id="task:test", current_mode="coding")
+
+        output = registry.execute(
+            "tool_search",
+            {"query": "help:git_add"},
+            session=session,
+            mode="coding",
+        )
+
+        self.assertIn("Tool: git_add", output)
+        self.assertIn("Parameters:", output)
+
+    def test_pipeline_includes_tool_catalog_in_model_context(self) -> None:
+        registry = _registry_with_tool(
+            "echo",
+            enabled_modes={"bot"},
+            always_on=True,
+        )
+        provider = ScriptedProvider([_final_response("done")])
+        pipeline = _pipeline(registry, provider)
+        session = Session(id="web:test", current_mode="bot")
+
+        reply = pipeline.run(session, SimpleNamespace(tool_mode="bot"))
+
+        self.assertEqual("done", reply)
+        sent_messages = provider.requests[0]["messages"]
+        self.assertIn("<tool_catalog>", sent_messages[-1]["content"])
+        self.assertIn("echo", sent_messages[-1]["content"])
 
     def test_tool_loop_hook_denial_stops_turn(self) -> None:
         registry = _registry_with_tool(
@@ -212,15 +283,15 @@ class PipelineToolLoopGuardTests(unittest.TestCase):
         self.assertEqual(4, provider.calls)
 
     def test_registry_distinguishes_hidden_and_forbidden_tools(self) -> None:
-        registry = _registry_with_tool("bash", enabled_modes={"coding"})
+        registry = _registry_with_tool("git_add", enabled_modes={"coding"})
         session = Session(id="web:test", current_mode="bot")
 
-        hidden = registry.execution_error_for_turn("bash", session=session, mode="coding")
-        forbidden = registry.execution_error_for_turn("bash", session=session, mode="bot")
+        hidden = registry.execution_error_for_turn("git_add", session=session, mode="coding")
+        forbidden = registry.execution_error_for_turn("git_add", session=session, mode="bot")
         unknown = registry.execution_error_for_turn("imaginary", session=session, mode="bot")
 
         self.assertIn("not visible in this turn", hidden)
-        self.assertEqual("Tool 'bash' is not allowed in bot mode.", forbidden)
+        self.assertEqual("Tool 'git_add' is not allowed in bot mode.", forbidden)
         self.assertEqual("Unknown tool: imaginary", unknown)
 
 

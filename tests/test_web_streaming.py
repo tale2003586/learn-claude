@@ -79,6 +79,18 @@ class StreamingHttpTests(unittest.TestCase):
         self.assertIn("&lt;script&gt;", html)
         self.assertIn("[image: 远程图]", html)
 
+    def test_chat_markdown_renders_tables(self) -> None:
+        html = render_chat_markdown(
+            "| 操作 | 写法 | 说明 |\n"
+            "|------|------|------|\n"
+            "| 创建 | `s = set()` | 空集合 |\n"
+        )
+
+        self.assertIn("<table>", html)
+        self.assertIn("<th>操作</th>", html)
+        self.assertIn("<td>创建</td>", html)
+        self.assertIn("<code>s = set()</code>", html)
+
     def test_chat_stream_endpoint_returns_delta_and_complete_events(self) -> None:
         class AgentService:
             def ask_stream(

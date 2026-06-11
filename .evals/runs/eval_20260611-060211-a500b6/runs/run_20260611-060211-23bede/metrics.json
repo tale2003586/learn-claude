@@ -1,0 +1,30 @@
+{
+  "run_id": "run_20260611-060211-23bede",
+  "session_id": "web:benchmark:coding-fix-math-001",
+  "status": "completed",
+  "reasoning_steps": 8,
+  "model_calls": 8,
+  "model_failures": 0,
+  "tool_calls": 13,
+  "tool_failures": 0,
+  "tool_denials": 0,
+  "total_model_duration_ms": 25165.851,
+  "total_tool_duration_ms": 66.444,
+  "input_tokens": 26467,
+  "output_tokens": 1298,
+  "total_tokens": 27765,
+  "model_retry_count": 3,
+  "model_route_attempts": 0,
+  "sanitized_messages": 0,
+  "run_duration_ms": 33226.441,
+  "models": [
+    "RoutedModelProvider:gpt-5.5"
+  ],
+  "tools": [
+    "bash",
+    "edit_file",
+    "git_status",
+    "read_file"
+  ],
+  "generated_at": "2026-06-11T06:02:44.882982+00:00"
+}

@@ -70,6 +70,7 @@ class ReasoningLoop:
     ) -> None:
         reasoning_steps = 0
         unavailable_attempts: dict[str, int] = {}
+        empty_model_responses = 0
 
         while True:
             reasoning_steps += 1
@@ -156,6 +157,52 @@ class ReasoningLoop:
                 reasoning_step=reasoning_steps,
             )
 
+            if _is_empty_response(response):
+                empty_model_responses += 1
+                self._trace(
+                    trace_store,
+                    run_state,
+                    REASONING_STEP_COMPLETED,
+                    {
+                        "reason": "empty_model_response",
+                        "tool_call_count": 0,
+                        "attempt": empty_model_responses,
+                    },
+                    step=reasoning_steps,
+                    span_id=_step_span_id(run_state, reasoning_steps),
+                )
+                self._trace(trace_store, run_state, "empty_model_response", {
+                    "step": reasoning_steps,
+                    "attempt": empty_model_responses,
+                })
+                if empty_model_responses >= 2:
+                    self._stop_turn(
+                        session,
+                        "本轮已停止：模型连续返回空回复且没有工具调用。",
+                        reason="empty_model_response",
+                        after_turn=after_turn,
+                        on_text=on_text,
+                        run_state=run_state,
+                        trace_store=trace_store,
+                    )
+                    return
+                session.add_message(
+                    "user",
+                    (
+                        "<runtime-retry reason=\"empty_model_response\">\n"
+                        "Your previous response was empty and contained no tool calls. "
+                        "Continue the task by either calling an appropriate tool or "
+                        "providing a concrete final answer.\n"
+                        "</runtime-retry>"
+                    ),
+                    metadata={
+                        "kind": "runtime_retry",
+                        "reason": "empty_model_response",
+                    },
+                )
+                continue
+
+            empty_model_responses = 0
             self._after_reasoning_step(session, response)
 
             if not response.tool_calls:
@@ -813,6 +860,19 @@ def _is_empty_assistant_message(message: dict) -> bool:
         return True
     if isinstance(content, str):
         return content == ""
+    if isinstance(content, list):
+        return len(content) == 0
+    return False
+
+
+def _is_empty_response(response) -> bool:
+    if getattr(response, "tool_calls", None):
+        return False
+    content = getattr(response, "content", None)
+    if content is None:
+        return True
+    if isinstance(content, str):
+        return content.strip() == ""
     if isinstance(content, list):
         return len(content) == 0
     return False

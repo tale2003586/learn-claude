@@ -1,0 +1,25 @@
+{
+  "root": "/tmp/coding-benchmark-7vty8get/coding-add-feature-003/coding_add_feature",
+  "file_count": 3,
+  "files": [
+    {
+      "path": "src/string_tools.py",
+      "sha256": "e8cfaf9e459fbacf373c1c5eb26a0da34af9416cda5a1e3923a2ee8164ec1b8b",
+      "size": 152,
+      "mtime_ns": 1781181259225617921
+    },
+    {
+      "path": "tests/test_normalize_whitespace.py",
+      "sha256": "a4b18a55a824cde0deda9a5e29470fb8e11bd40a93472a8cab56c568e38ebe3f",
+      "size": 809,
+      "mtime_ns": 1781181259226587057
+    },
+    {
+      "path": "tests/test_string_tools.py",
+      "sha256": "698b9af7c481072f8205c107b62b36ac8562b150a7938c7213f1f5df6dc4fa6b",
+      "size": 128,
+      "mtime_ns": 1781090031032196264
+    }
+  ],
+  "skipped": []
+}

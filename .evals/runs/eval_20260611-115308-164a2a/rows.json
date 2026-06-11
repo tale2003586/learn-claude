@@ -1,0 +1,81 @@
+[
+  {
+    "id": "coding-invalid-edit-recovery-009",
+    "category": "recovery",
+    "runner_mode": "real",
+    "status": "pass",
+    "passed": true,
+    "failure_category": "",
+    "failure_reason": "",
+    "prompt": "这是一个编辑失败恢复任务。请先用 list_files 查看 workspace，再读取 notes.txt。任务要求你先故意用一次错误的 edit_file 参数尝试把不存在的 status: missing 改成 status: ready，确认这次编辑失败后不要卡住；随后恢复并用正确参数把 notes.txt 中的 status: draft 改为 status: ready。完成后读取或 diff 确认 notes.txt 已更新。",
+    "workspace_relpath": "coding-invalid-edit-recovery-009/coding_invalid_edit",
+    "workspace_path": "/tmp/coding-benchmark-dp111bti/coding-invalid-edit-recovery-009/coding_invalid_edit",
+    "run_id": "run_20260611-115308-756456",
+    "run_dir": ".evals/runs/eval_20260611-115308-164a2a/runs/run_20260611-115308-756456",
+    "allowed_tools": [
+      "list_files",
+      "read_file",
+      "edit_file",
+      "git_diff"
+    ],
+    "step_budget": 7,
+    "effective_step_budget": 30,
+    "budget_disabled": false,
+    "reasoning_steps": 6,
+    "tool_calls": 5,
+    "within_budget": true,
+    "verifier_passed": true,
+    "workspace_diff_passed": true,
+    "trace_passed": true,
+    "run_status": "completed",
+    "final_answer": "[TaskSession `coding-e1c1ab6d` completed]\n\n任务完成。总结如下：\n\n| 步骤 | 操作 | 结果 |\n|------|------|------|\n| 1 | `list_files` | 确认 workspace 中有 `notes.txt` |\n| 2 | `read_file notes.txt` | 内容：`status: draft` / `owner: benchmark` |\n| 3 | 故意错误编辑：`status: missing` → `status: ready` | **失败** — `Text not found in notes.txt`（符合预期，未卡住） |\n| 4 | 正确编辑：`status: draft` → `status: ready` | **成功** — `Edited notes.txt` |\n| 5 | `read_file notes.txt` 确认 | `status: ready` 已写入，`owner: benchmark` 保持不变 ✓ |\n\nTask log: `.task_sessions/coding-e1c1ab6d/TASK_LOG.md`\nConclusions: `.task_sessions/coding-e1c1ab6d/CONCLUSIONS.json`",
+    "error": "",
+    "verifier": {
+      "passed": true,
+      "checks": [
+        {
+          "name": "modified",
+          "path": "notes.txt",
+          "passed": true
+        },
+        {
+          "name": "file_contains",
+          "path": "notes.txt",
+          "needle": "status: ready",
+          "passed": true
+        },
+        {
+          "name": "trace_event_exists",
+          "event": "workspace.resolved",
+          "passed": true
+        },
+        {
+          "name": "trace_event_exists",
+          "event": "workspace.diff.written",
+          "passed": true
+        },
+        {
+          "name": "tool_called",
+          "tool": "edit_file",
+          "passed": true
+        },
+        {
+          "name": "run_status_completed",
+          "passed": true,
+          "status": "completed"
+        }
+      ],
+      "workspace_diff_summary": {
+        "created": 0,
+        "modified": 1,
+        "deleted": 0,
+        "before_files": 1,
+        "after_files": 1,
+        "before_skipped": 0,
+        "after_skipped": 0
+      },
+      "run_status": "completed"
+    },
+    "duration_ms": 47178.911
+  }
+]

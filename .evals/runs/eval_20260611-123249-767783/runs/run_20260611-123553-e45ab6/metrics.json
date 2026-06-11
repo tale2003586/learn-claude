@@ -1,0 +1,28 @@
+{
+  "run_id": "run_20260611-123553-e45ab6",
+  "session_id": "web:benchmark:coding-path-escape-006",
+  "status": "completed",
+  "reasoning_steps": 4,
+  "model_calls": 4,
+  "model_failures": 0,
+  "tool_calls": 4,
+  "tool_failures": 0,
+  "tool_denials": 0,
+  "total_model_duration_ms": 12011.975,
+  "total_tool_duration_ms": 0.99,
+  "input_tokens": 9258,
+  "output_tokens": 606,
+  "total_tokens": 9864,
+  "model_retry_count": 0,
+  "model_route_attempts": 0,
+  "sanitized_messages": 0,
+  "run_duration_ms": 30052.769,
+  "models": [
+    "RoutedModelProvider:deepseek-v4-pro"
+  ],
+  "tools": [
+    "edit_file",
+    "read_file"
+  ],
+  "generated_at": "2026-06-11T12:36:23.097642+00:00"
+}

@@ -959,7 +959,8 @@ button {
 .markdown-body ul,
 .markdown-body ol,
 .markdown-body blockquote,
-.markdown-body pre {
+.markdown-body pre,
+.markdown-body .table-block-wrapper {
   margin: 9px 0;
 }
 
@@ -1030,6 +1031,55 @@ button {
   padding: 0;
   color: #e2e8f0;
   background: transparent;
+}
+
+.markdown-body .table-block-wrapper {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.markdown-body table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.markdown-body th,
+.markdown-body td {
+  padding: 8px 10px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+  white-space: normal;
+}
+
+.markdown-body th:last-child,
+.markdown-body td:last-child {
+  border-right: 0;
+}
+
+.markdown-body tr:last-child td {
+  border-bottom: 0;
+}
+
+.markdown-body th {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+  font-weight: 650;
+}
+
+.markdown-body td {
+  color: var(--muted);
+}
+
+.markdown-body td code {
+  white-space: nowrap;
 }
 
 .markdown-body blockquote {

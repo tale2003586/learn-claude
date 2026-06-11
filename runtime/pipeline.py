@@ -4,6 +4,7 @@ from config import THRESHOLD
 from bus.team_bus import BUS
 from runtime.agent_runner import AgentRunner
 from runtime.agent_spec import AgentSpec
+from runtime.context import ContextBundle
 from runtime.reasoning_loop import DEFAULT_MAX_REASONING_STEPS
 from typing import Callable
 
@@ -127,11 +128,36 @@ class Pipeline:
             notifs = []
             inbox = []
 
-        return self.agent_runner.context_builder.build(
+        context = self.agent_runner.context_builder.build(
             session=session,
             profile=profile,
             inbox=inbox,
             background_results=notifs,
+        )
+        return self._with_tool_catalog(context, session, profile)
+
+    def _with_tool_catalog(self, context, session, profile):
+        catalog = self._tool_catalog(session, profile)
+        if not catalog:
+            return context
+        messages = list(getattr(context, "messages", []) or [])
+        messages.append({
+            "role": "user",
+            "content": catalog,
+        })
+        return ContextBundle(
+            messages=messages,
+            report=getattr(context, "report", None),
+        )
+
+    def _tool_catalog(self, session, profile) -> str:
+        tools = self.agent_runner.tools
+        render = getattr(tools, "tool_catalog_text", None)
+        if render is None:
+            return ""
+        return render(
+            session,
+            str(getattr(profile, "tool_mode", "bot") or "bot"),
         )
 
     def _agent_spec(self, session, profile) -> AgentSpec:

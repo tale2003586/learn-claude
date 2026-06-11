@@ -22,8 +22,11 @@ PRELOADED_TOOLS_BY_MODE = {
         "publish_artifact",
     },
     "coding": {
+        "bash",
+        "edit_file",
         "list_files",
         "read_file",
+        "write_file",
         "git_status",
         "git_diff",
         "git_log",

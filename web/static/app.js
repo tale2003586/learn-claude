@@ -370,6 +370,14 @@ function renderMessages(messages, forceScroll = false) {
         });
         wrapper.appendChild(copyBtn);
       });
+
+      body.querySelectorAll("table").forEach((table) => {
+        if (table.parentElement?.classList.contains("table-block-wrapper")) return;
+        const wrapper = document.createElement("div");
+        wrapper.className = "table-block-wrapper";
+        table.parentNode.insertBefore(wrapper, table);
+        wrapper.appendChild(table);
+      });
     } else {
       body.textContent = messageText(message);
     }

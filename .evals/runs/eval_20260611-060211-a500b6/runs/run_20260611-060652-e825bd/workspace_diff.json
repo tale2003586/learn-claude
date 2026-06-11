@@ -1,0 +1,19 @@
+{
+  "root": "/tmp/coding-benchmark-m5qk8kvn/coding-workspace-trace-011/coding_trace_workspace",
+  "created": [],
+  "modified": [],
+  "deleted": [],
+  "summary": {
+    "created": 0,
+    "modified": 0,
+    "deleted": 0,
+    "before_files": 1,
+    "after_files": 1,
+    "before_skipped": 0,
+    "after_skipped": 0
+  },
+  "skipped": {
+    "before": [],
+    "after": []
+  }
+}

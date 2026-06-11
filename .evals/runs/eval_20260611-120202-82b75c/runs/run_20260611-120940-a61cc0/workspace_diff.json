@@ -1,0 +1,33 @@
+{
+  "root": "/tmp/coding-benchmark-jw4_mlk1/coding-invalid-edit-recovery-009/coding_invalid_edit",
+  "created": [],
+  "modified": [
+    {
+      "path": "notes.txt",
+      "before": {
+        "sha256": "3b0e123b423829f778c0b9462081fe156c2c367cef4f23842253e961b3e938a2",
+        "size": 31,
+        "mtime_ns": 1781090031043239113
+      },
+      "after": {
+        "sha256": "c6879048c885cf6b3a9c6095a0661129b055b810190c4415962fb55a087c0823",
+        "size": 31,
+        "mtime_ns": 1781179790769698421
+      }
+    }
+  ],
+  "deleted": [],
+  "summary": {
+    "created": 0,
+    "modified": 1,
+    "deleted": 0,
+    "before_files": 1,
+    "after_files": 1,
+    "before_skipped": 0,
+    "after_skipped": 0
+  },
+  "skipped": {
+    "before": [],
+    "after": []
+  }
+}

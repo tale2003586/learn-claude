@@ -1,0 +1,33 @@
+{
+  "root": "/tmp/coding-benchmark-m5qk8kvn/coding-fix-math-001/coding_fix_math",
+  "created": [],
+  "modified": [
+    {
+      "path": "src/math_tools.py",
+      "before": {
+        "sha256": "f3d989a5421905e3fe9b8620ba2b69b6272ee4dfde2583533ab7d47475c95b7d",
+        "size": 126,
+        "mtime_ns": 1781090031032196264
+      },
+      "after": {
+        "sha256": "68adf50a3338b962fdf612d66cb0f6e2a90d60281897e9665da480837002f38f",
+        "size": 126,
+        "mtime_ns": 1781157756954380687
+      }
+    }
+  ],
+  "deleted": [],
+  "summary": {
+    "created": 0,
+    "modified": 1,
+    "deleted": 0,
+    "before_files": 2,
+    "after_files": 2,
+    "before_skipped": 0,
+    "after_skipped": 0
+  },
+  "skipped": {
+    "before": [],
+    "after": []
+  }
+}

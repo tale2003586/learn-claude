@@ -1,0 +1,13 @@
+{
+  "root": "/tmp/coding-benchmark-7vty8get/coding-workspace-trace-011/coding_trace_workspace",
+  "file_count": 1,
+  "files": [
+    {
+      "path": "src/module.py",
+      "sha256": "5ff82e1a711506e5361da7500fc16050094b7ab257d943ead8cb9f77bcbbf390",
+      "size": 38,
+      "mtime_ns": 1781090031043239113
+    }
+  ],
+  "skipped": []
+}

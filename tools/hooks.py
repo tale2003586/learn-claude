@@ -1,6 +1,7 @@
 
 from collections import deque
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,36 @@ class ShellSafetyHook(ToolHook):
             return HookOutcome(
                 deny_reason="Error: Dangerous shell command blocked by shell_safety hook."
             )
+        return HookOutcome()
+
+
+class ShellWorkspaceScopeHook(ToolHook):
+    name = "shell_workspace_scope"
+
+    def __init__(self, workspace: Path | None = None) -> None:
+        self.workspace = (workspace or WORKDIR).resolve()
+
+    def matches(self, request: ToolExecutionRequest) -> bool:
+        return request.tool_name == "bash"
+
+    def before(self, request: ToolExecutionRequest) -> HookOutcome:
+        command = str(request.arguments.get("command", ""))
+        metadata = request.metadata or {}
+        workspace = (
+            Path(str(metadata.get("workspace_root"))).expanduser().resolve()
+            if metadata.get("workspace_root")
+            else self.workspace
+        )
+        for raw_target in _absolute_cd_targets(command):
+            target = Path(raw_target).expanduser().resolve()
+            if not target.is_relative_to(workspace):
+                return HookOutcome(
+                    deny_reason=(
+                        "Error: Shell command changes directory outside workspace. "
+                        "bash already runs at the task workspace root; use relative "
+                        "paths or cd only within the workspace."
+                    )
+                )
         return HookOutcome()
 
 
@@ -115,3 +146,15 @@ class ToolTraceHook(ToolHook):
             "final_arguments": result.final_arguments,
             "result_preview": str(result.output)[:500],
         })
+
+
+def _absolute_cd_targets(command: str) -> list[str]:
+    targets = []
+    pattern = re.compile(
+        r"(?:^|[;&|]\s*)cd\s+(?P<quote>['\"]?)(?P<target>/[^'\";&|`\s]*)(?P=quote)"
+    )
+    for match in pattern.finditer(command or ""):
+        target = match.group("target").strip()
+        if target:
+            targets.append(target)
+    return targets

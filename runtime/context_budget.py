@@ -91,7 +91,19 @@ class ContextBudgeter:
             "floor_chars": floor,
         }
 
-        if not self.enabled or len(rendered) <= target:
+        if not self.enabled:
+            return BudgetedText(
+                name=name,
+                raw_text=raw,
+                rendered_text=rendered,
+                budget_chars=None,
+                floor_chars=floor,
+                strategy=rule.strategy,
+                truncated=False,
+                metadata=metadata,
+            )
+
+        if len(rendered) <= target:
             return BudgetedText(
                 name=name,
                 raw_text=raw,

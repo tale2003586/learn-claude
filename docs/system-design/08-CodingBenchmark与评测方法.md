@@ -248,6 +248,18 @@ python scripts/run_evals.py --suite coding --task-id coding-git-diff-008 --keep-
 python scripts/run_evals.py --suite coding --runner real
 ```
 
+临时关闭 benchmark 步数预算，观察真实模型不被 task `step_budget` 截停时能否完成：
+
+```bash
+python scripts/run_evals.py --suite coding --runner real --task-id coding-invalid-edit-recovery-009 --no-step-budget --keep-workspace
+```
+
+临时指定更大的步数上限：
+
+```bash
+python scripts/run_evals.py --suite coding --runner real --task-id coding-invalid-edit-recovery-009 --max-reasoning-steps 30 --keep-workspace
+```
+
 指定 eval root：
 
 ```bash
@@ -272,4 +284,3 @@ python scripts/run_evals.py --suite coding --eval-root /tmp/my-evals
 当前 coding benchmark 的重点不是给模型打一个模糊分数，而是把任务变成合同，把执行放进隔离 workspace，把结果交给 verifier，把行为交给 trace，把失败写成可诊断 row。
 
 scripted runner 保证平台链路可靠，real runner 再评估模型能力。这个分层可以避免把平台 bug 和模型波动混在一起。
-

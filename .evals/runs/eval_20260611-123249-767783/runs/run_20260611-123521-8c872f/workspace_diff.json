@@ -1,0 +1,33 @@
+{
+  "root": "/tmp/coding-benchmark-7vty8get/coding-doc-update-005/coding_doc_update",
+  "created": [],
+  "modified": [
+    {
+      "path": "README.md",
+      "before": {
+        "sha256": "9c12274816467be809510ac0d6d5d393ca92c257a5468faade4ee8f0a6851ad3",
+        "size": 129,
+        "mtime_ns": 1781090031032196264
+      },
+      "after": {
+        "sha256": "8cf7930b4ac26b319c4a63accbd206e5059be53b55035e2aad7c9eee3f286fc9",
+        "size": 208,
+        "mtime_ns": 1781181327208781464
+      }
+    }
+  ],
+  "deleted": [],
+  "summary": {
+    "created": 0,
+    "modified": 1,
+    "deleted": 0,
+    "before_files": 2,
+    "after_files": 2,
+    "before_skipped": 0,
+    "after_skipped": 0
+  },
+  "skipped": {
+    "before": [],
+    "after": []
+  }
+}

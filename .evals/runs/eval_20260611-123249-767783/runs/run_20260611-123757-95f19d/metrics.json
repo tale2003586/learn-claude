@@ -1,0 +1,27 @@
+{
+  "run_id": "run_20260611-123757-95f19d",
+  "session_id": "web:benchmark:coding-repeat-tool-010",
+  "status": "completed",
+  "reasoning_steps": 3,
+  "model_calls": 3,
+  "model_failures": 0,
+  "tool_calls": 3,
+  "tool_failures": 0,
+  "tool_denials": 1,
+  "total_model_duration_ms": 8450.799,
+  "total_tool_duration_ms": 0.489,
+  "input_tokens": 6532,
+  "output_tokens": 259,
+  "total_tokens": 6791,
+  "model_retry_count": 0,
+  "model_route_attempts": 0,
+  "sanitized_messages": 0,
+  "run_duration_ms": 22447.377,
+  "models": [
+    "RoutedModelProvider:deepseek-v4-pro"
+  ],
+  "tools": [
+    "read_file"
+  ],
+  "generated_at": "2026-06-11T12:38:19.523189+00:00"
+}

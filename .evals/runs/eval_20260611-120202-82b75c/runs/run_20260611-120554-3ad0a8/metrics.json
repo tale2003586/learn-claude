@@ -1,0 +1,30 @@
+{
+  "run_id": "run_20260611-120554-3ad0a8",
+  "session_id": "web:benchmark:coding-refactor-config-004",
+  "status": "completed",
+  "reasoning_steps": 8,
+  "model_calls": 8,
+  "model_failures": 0,
+  "tool_calls": 12,
+  "tool_failures": 0,
+  "tool_denials": 0,
+  "total_model_duration_ms": 43075.513,
+  "total_tool_duration_ms": 2841.842,
+  "input_tokens": 26742,
+  "output_tokens": 1543,
+  "total_tokens": 28285,
+  "model_retry_count": 0,
+  "model_route_attempts": 0,
+  "sanitized_messages": 0,
+  "run_duration_ms": 64263.486,
+  "models": [
+    "RoutedModelProvider:deepseek-v4-pro"
+  ],
+  "tools": [
+    "bash",
+    "edit_file",
+    "list_files",
+    "read_file"
+  ],
+  "generated_at": "2026-06-11T12:06:58.552918+00:00"
+}

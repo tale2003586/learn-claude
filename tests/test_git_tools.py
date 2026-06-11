@@ -5,6 +5,8 @@ from pathlib import Path
 
 from sessions.session import Session
 from tools import handlers
+from tools.executor import ToolExecutionRequest, ToolExecutor
+from tools.hooks import ShellWorkspaceScopeHook
 from tools.tool_registry import build_lead_tool_registry
 
 
@@ -67,6 +69,9 @@ class GitToolTests(unittest.TestCase):
         session = _session_for(Path("/tmp/project"))
 
         visible = registry.visible_names_for_turn(session, "coding")
+        self.assertIn("bash", visible)
+        self.assertIn("edit_file", visible)
+        self.assertIn("write_file", visible)
         self.assertIn("list_files", visible)
         self.assertIn("git_status", visible)
         self.assertIn("git_diff", visible)
@@ -96,6 +101,41 @@ class GitToolTests(unittest.TestCase):
 
             escaped = handlers.run_list_files("../outside", _session=session)
             self.assertIn("Path escapes workspace", escaped)
+
+    def test_shell_workspace_scope_blocks_external_cd(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "project"
+            workspace.mkdir()
+            inside = workspace / "subdir"
+            inside.mkdir()
+            session = _session_for(workspace)
+            executor = ToolExecutor([ShellWorkspaceScopeHook(workspace)])
+
+            blocked = executor.execute(
+                ToolExecutionRequest(
+                    call_id="call-1",
+                    tool_name="bash",
+                    arguments={"command": "cd /home/tale/kaggle/mytry && pwd"},
+                    session_id=session.id,
+                    metadata=session.metadata,
+                ),
+                lambda name, args: "should not run",
+            )
+            self.assertEqual("denied", blocked.status)
+            self.assertIn("outside workspace", blocked.output)
+
+            allowed = executor.execute(
+                ToolExecutionRequest(
+                    call_id="call-2",
+                    tool_name="bash",
+                    arguments={"command": f"cd {inside} && pwd"},
+                    session_id=session.id,
+                    metadata=session.metadata,
+                ),
+                lambda name, args: "ok",
+            )
+            self.assertEqual("success", allowed.status)
+            self.assertEqual("ok", allowed.output)
 
 
 if __name__ == "__main__":

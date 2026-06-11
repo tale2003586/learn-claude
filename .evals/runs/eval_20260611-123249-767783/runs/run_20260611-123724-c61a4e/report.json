@@ -1,0 +1,51 @@
+{
+  "run_state": {
+    "run_id": "run_20260611-123724-c61a4e",
+    "session_id": "web:benchmark:coding-invalid-edit-recovery-009",
+    "channel": "benchmark",
+    "chat_id": "coding-invalid-edit-recovery-009",
+    "user_id": "benchmark",
+    "user_role": "admin",
+    "mode": "coding",
+    "execution_path": "task_session",
+    "status": "completed",
+    "reasoning_steps": 5,
+    "tool_calls": 4,
+    "last_tool": "read_file",
+    "stop_reason": null,
+    "started_at": "2026-06-11T12:37:24.427122+00:00",
+    "finished_at": "2026-06-11T12:37:57.056058+00:00",
+    "final_answer": "[TaskSession `coding-f06b434a` completed]\n\n任务完成。总结：\n\n1. **故意失败编辑**：尝试将不存在的 `status: missing` 替换为 `status: ready` → 返回 `Error: Text not found in notes.txt`，符合预期。\n2. **正确编辑**：将文件中实际存在的 `status: draft` 替换为 `status: ready` → 编辑成功。\n3. **验证结果**：`notes.txt` 最终内容为 `status: ready`（以及 `owner: benchmark`）。\n\nPromoted 3 task memory item(s) to global PENDING.md.\n\nTask log: `.task_sessions/coding-f06b434a/TASK_LOG.md`\nConclusions: `.task_sessions/coding-f06b434a/CONCLUSIONS.json`",
+    "error": null,
+    "intent": "",
+    "profile": "",
+    "metadata": {
+      "benchmark_task_id": "coding-invalid-edit-recovery-009",
+      "task_session": {
+        "task_id": "coding-f06b434a",
+        "task_session_id": "task:coding-f06b434a",
+        "status": "completed",
+        "task_log_path": ".task_sessions/coding-f06b434a/TASK_LOG.md",
+        "conclusions_path": ".task_sessions/coding-f06b434a/CONCLUSIONS.json",
+        "promoted_count": 3,
+        "skipped_count": 0,
+        "rejected_count": 0,
+        "workspace_diff": {
+          "created": 0,
+          "modified": 1,
+          "deleted": 0,
+          "before_files": 1,
+          "after_files": 1,
+          "before_skipped": 0,
+          "after_skipped": 0
+        }
+      }
+    }
+  },
+  "report": {
+    "benchmark_task_id": "coding-invalid-edit-recovery-009",
+    "category": "recovery",
+    "workspace_root": "/tmp/coding-benchmark-7vty8get/coding-invalid-edit-recovery-009/coding_invalid_edit"
+  },
+  "generated_at": "2026-06-11T12:37:57.056261+00:00"
+}

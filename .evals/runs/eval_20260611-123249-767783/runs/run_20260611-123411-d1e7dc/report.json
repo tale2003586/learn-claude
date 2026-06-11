@@ -1,0 +1,51 @@
+{
+  "run_state": {
+    "run_id": "run_20260611-123411-d1e7dc",
+    "session_id": "web:benchmark:coding-add-feature-003",
+    "channel": "benchmark",
+    "chat_id": "coding-add-feature-003",
+    "user_id": "benchmark",
+    "user_role": "admin",
+    "mode": "coding",
+    "execution_path": "task_session",
+    "status": "completed",
+    "reasoning_steps": 5,
+    "tool_calls": 6,
+    "last_tool": "bash",
+    "stop_reason": null,
+    "started_at": "2026-06-11T12:34:11.232890+00:00",
+    "finished_at": "2026-06-11T12:34:44.081639+00:00",
+    "final_answer": "[TaskSession `coding-1425d5c4` completed]\n\n全部 6 个测试通过。\n\n---\n\n**改动总结：**\n\n**`src/string_tools.py`** — 新增 `normalize_whitespace(text)` 函数：\n- 用 `re.sub(r\"\\s+\", \" \", text)` 将任意连续空白字符（空格、制表符、换行等）压缩为单个空格\n- 用 `.strip()` 去除首尾空白\n- 顶部添加了 `import re`\n\n**`tests/test_normalize_whitespace.py`** — 新建测试文件，覆盖 5 个场景：\n| 测试函数 | 覆盖场景 |\n|---|---|\n| `test_normalize_newlines` | `\\n` 和 `\\r\\n` |\n| `test_normalize_tabs` | `\\t` 和连续制表符 |\n| `test_normalize_multiple_spaces` | 多个连续空格 |\n| `test_normalize_mixed_whitespace` | 空格+制表符+换行混合 |\n| `test_strip_leading_trailing` | 首尾空白去除 |\n\n```bash\n$ python -m pytest -q\n......                                                                   [100%]\n6 passed in 0.03s\n```\n\nTask log: `.task_sessions/coding-1425d5c4/TASK_LOG.md`\nConclusions: `.task_sessions/coding-1425d5c4/CONCLUSIONS.json`",
+    "error": null,
+    "intent": "",
+    "profile": "",
+    "metadata": {
+      "benchmark_task_id": "coding-add-feature-003",
+      "task_session": {
+        "task_id": "coding-1425d5c4",
+        "task_session_id": "task:coding-1425d5c4",
+        "status": "completed",
+        "task_log_path": ".task_sessions/coding-1425d5c4/TASK_LOG.md",
+        "conclusions_path": ".task_sessions/coding-1425d5c4/CONCLUSIONS.json",
+        "promoted_count": 0,
+        "skipped_count": 0,
+        "rejected_count": 0,
+        "workspace_diff": {
+          "created": 1,
+          "modified": 1,
+          "deleted": 0,
+          "before_files": 2,
+          "after_files": 3,
+          "before_skipped": 0,
+          "after_skipped": 0
+        }
+      }
+    }
+  },
+  "report": {
+    "benchmark_task_id": "coding-add-feature-003",
+    "category": "feature",
+    "workspace_root": "/tmp/coding-benchmark-7vty8get/coding-add-feature-003/coding_add_feature"
+  },
+  "generated_at": "2026-06-11T12:34:44.081888+00:00"
+}

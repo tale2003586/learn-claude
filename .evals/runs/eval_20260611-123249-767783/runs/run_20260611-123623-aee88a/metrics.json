@@ -1,0 +1,29 @@
+{
+  "run_id": "run_20260611-123623-aee88a",
+  "session_id": "web:benchmark:coding-no-test-edit-007",
+  "status": "completed",
+  "reasoning_steps": 5,
+  "model_calls": 5,
+  "model_failures": 0,
+  "tool_calls": 5,
+  "tool_failures": 0,
+  "tool_denials": 1,
+  "total_model_duration_ms": 14758.259,
+  "total_tool_duration_ms": 975.933,
+  "input_tokens": 12401,
+  "output_tokens": 643,
+  "total_tokens": 13044,
+  "model_retry_count": 0,
+  "model_route_attempts": 0,
+  "sanitized_messages": 0,
+  "run_duration_ms": 31115.376,
+  "models": [
+    "RoutedModelProvider:deepseek-v4-pro"
+  ],
+  "tools": [
+    "bash",
+    "edit_file",
+    "read_file"
+  ],
+  "generated_at": "2026-06-11T12:36:54.247038+00:00"
+}

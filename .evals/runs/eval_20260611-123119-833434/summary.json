@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "eval_id": "eval_20260611-123119-833434",
+  "captured_at": "2026-06-11T12:32:00.374952+00:00",
+  "runner": {
+    "mode": "real",
+    "provider": "MODEL_POOL:coding",
+    "model": "deepseek-v4-pro"
+  },
+  "benchmark": {
+    "source": "benchmarks/coding_tasks.json",
+    "task_count": 1,
+    "task_id": "coding-fix-parser-002",
+    "no_step_budget": false,
+    "max_reasoning_steps": 10
+  },
+  "workspace_root": "/tmp/coding-benchmark-fcvrozoo",
+  "workspace_retained": true,
+  "summary": {
+    "total_tasks": 1,
+    "passed": 1,
+    "failed": 0,
+    "pass_rate": 1.0,
+    "within_budget": 1,
+    "within_budget_rate": 1.0,
+    "verifier_passes": 1,
+    "verifier_pass_rate": 1.0,
+    "workspace_diff_pass_rate": 1.0,
+    "trace_completeness_rate": 1.0,
+    "avg_reasoning_steps": 5.0,
+    "avg_tool_calls": 5.0,
+    "failure_category_counts": {}
+  },
+  "rows": [
+    {
+      "id": "coding-fix-parser-002",
+      "category": "bugfix",
+      "runner_mode": "real",
+      "status": "pass",
+      "passed": true,
+      "failure_category": "",
+      "failure_reason": "",
+      "prompt": "这是一个 Python bugfix 任务。目标文件是 src/parser.py，相关测试是 tests/test_parser.py。请修复 parse_port 在输入为空字符串时返回默认端口的逻辑。不要修改 tests/test_parser.py。完成后应能通过 python -m pytest -q，并且改动范围应只包含实现修复。",
+      "workspace_relpath": "coding-fix-parser-002/coding_fix_parser",
+      "workspace_path": "/tmp/coding-benchmark-fcvrozoo/coding-fix-parser-002/coding_fix_parser",
+      "run_id": "run_20260611-123119-fcf72b",
+      "run_dir": ".evals/runs/eval_20260611-123119-833434/runs/run_20260611-123119-fcf72b",
+      "allowed_tools": [
+        "list_files",
+        "read_file",
+        "edit_file",
+        "bash",
+        "git_diff"
+      ],
+      "step_budget": 7,
+      "effective_step_budget": 10,
+      "budget_disabled": false,
+      "reasoning_steps": 5,
+      "tool_calls": 5,
+      "within_budget": true,
+      "verifier_passed": true,
+      "workspace_diff_passed": true,
+      "trace_passed": true,
+      "run_status": "completed",
+      "final_answer": "[TaskSession `coding-275609c3` completed]\n\n修复完成。**改动内容：**\n\n`src/parser.py` 第 3 行：将空字符串分支的返回值从 `0` 改为 `8000`。\n\n```diff\n-        return 0\n+        return 8000\n```\n\n**验证结果：** `python -m pytest -q tests/test_parser.py` 全部 3 个测试通过，且仅修改了 `src/parser.py` 一个文件。\n\nTask log: `.task_sessions/coding-275609c3/TASK_LOG.md`\nConclusions: `.task_sessions/coding-275609c3/CONCLUSIONS.json`",
+      "error": "",
+      "verifier": {
+        "passed": true,
+        "checks": [
+          {
+            "name": "must_pass_command",
+            "passed": true,
+            "command": "python -m pytest -q",
+            "stdout": "...                                                                      [100%]\n3 passed in 0.03s\n",
+            "stderr": ""
+          },
+          {
+            "name": "modified",
+            "path": "src/parser.py",
+            "passed": true
+          },
+          {
+            "name": "not_modified",
+            "path": "tests/test_parser.py",
+            "passed": true
+          },
+          {
+            "name": "trace_event_exists",
+            "event": "workspace.resolved",
+            "passed": true
+          },
+          {
+            "name": "trace_event_exists",
+            "event": "workspace.diff.written",
+            "passed": true
+          },
+          {
+            "name": "tool_called",
+            "tool": "read_file",
+            "passed": true
+          },
+          {
+            "name": "tool_called",
+            "tool": "edit_file",
+            "passed": true
+          },
+          {
+            "name": "tool_called",
+            "tool": "bash",
+            "passed": true
+          },
+          {
+            "name": "run_status_completed",
+            "passed": true,
+            "status": "completed"
+          }
+        ],
+        "workspace_diff_summary": {
+          "created": 0,
+          "modified": 1,
+          "deleted": 0,
+          "before_files": 2,
+          "after_files": 2,
+          "before_skipped": 0,
+          "after_skipped": 0
+        },
+        "run_status": "completed"
+      },
+      "duration_ms": 40542.635
+    }
+  ]
+}

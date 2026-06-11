@@ -1,0 +1,19 @@
+{
+  "root": "/tmp/coding-benchmark-7vty8get/coding-fix-math-001/coding_fix_math",
+  "file_count": 2,
+  "files": [
+    {
+      "path": "src/math_tools.py",
+      "sha256": "68adf50a3338b962fdf612d66cb0f6e2a90d60281897e9665da480837002f38f",
+      "size": 126,
+      "mtime_ns": 1781181196157577285
+    },
+    {
+      "path": "tests/test_math_tools.py",
+      "sha256": "e18cfd3dc2a83d0972293dc5543138ef6365408fa2893dd52690f3c20efb275f",
+      "size": 229,
+      "mtime_ns": 1781090031032196264
+    }
+  ],
+  "skipped": []
+}

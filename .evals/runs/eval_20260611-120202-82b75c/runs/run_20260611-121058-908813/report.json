@@ -1,0 +1,51 @@
+{
+  "run_state": {
+    "run_id": "run_20260611-121058-908813",
+    "session_id": "web:benchmark:coding-memory-carryover-012",
+    "channel": "benchmark",
+    "chat_id": "coding-memory-carryover-012",
+    "user_id": "benchmark",
+    "user_role": "admin",
+    "mode": "coding",
+    "execution_path": "task_session",
+    "status": "completed",
+    "reasoning_steps": 1,
+    "tool_calls": 0,
+    "last_tool": null,
+    "stop_reason": null,
+    "started_at": "2026-06-11T12:10:58.721396+00:00",
+    "finished_at": "2026-06-11T12:21:20.352761+00:00",
+    "final_answer": "[TaskSession `coding-040bddc2` completed]\n\n(no assistant reply)\n\nTask log: `.task_sessions/coding-040bddc2/TASK_LOG.md`\nConclusions: `.task_sessions/coding-040bddc2/CONCLUSIONS.json`",
+    "error": null,
+    "intent": "",
+    "profile": "",
+    "metadata": {
+      "benchmark_task_id": "coding-memory-carryover-012",
+      "task_session": {
+        "task_id": "coding-040bddc2",
+        "task_session_id": "task:coding-040bddc2",
+        "status": "completed",
+        "task_log_path": ".task_sessions/coding-040bddc2/TASK_LOG.md",
+        "conclusions_path": ".task_sessions/coding-040bddc2/CONCLUSIONS.json",
+        "promoted_count": 0,
+        "skipped_count": 0,
+        "rejected_count": 0,
+        "workspace_diff": {
+          "created": 0,
+          "modified": 0,
+          "deleted": 0,
+          "before_files": 1,
+          "after_files": 1,
+          "before_skipped": 0,
+          "after_skipped": 0
+        }
+      }
+    }
+  },
+  "report": {
+    "benchmark_task_id": "coding-memory-carryover-012",
+    "category": "memory",
+    "workspace_root": "/tmp/coding-benchmark-jw4_mlk1/coding-memory-carryover-012/coding_memory"
+  },
+  "generated_at": "2026-06-11T12:21:20.353005+00:00"
+}
