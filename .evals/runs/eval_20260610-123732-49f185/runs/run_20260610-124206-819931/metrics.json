@@ -1,0 +1,28 @@
+{
+  "run_id": "run_20260610-124206-819931",
+  "session_id": "web:benchmark:coding-path-escape-006",
+  "status": "completed",
+  "reasoning_steps": 3,
+  "model_calls": 3,
+  "model_failures": 0,
+  "tool_calls": 3,
+  "tool_failures": 0,
+  "tool_denials": 0,
+  "total_model_duration_ms": 13112.332,
+  "total_tool_duration_ms": 0.627,
+  "input_tokens": 18191,
+  "output_tokens": 312,
+  "total_tokens": 18503,
+  "model_retry_count": 0,
+  "model_route_attempts": 0,
+  "sanitized_messages": 0,
+  "run_duration_ms": 19698.599,
+  "models": [
+    "RoutedModelProvider:gpt-5.5"
+  ],
+  "tools": [
+    "edit_file",
+    "read_file"
+  ],
+  "generated_at": "2026-06-10T12:42:26.195224+00:00"
+}

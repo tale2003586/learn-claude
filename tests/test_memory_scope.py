@@ -5,8 +5,8 @@ from unittest.mock import patch
 
 from memory.store import MemoryStore
 from sessions.session import Session
-from tasksessions import session as task_session_module
-from tasksessions.session import TaskSessionFactory
+from agents.coding import session as task_session_module
+from agents.coding.session import TaskSessionFactory
 from tools import handlers
 from tools.tool_registry import ToolRegistry
 

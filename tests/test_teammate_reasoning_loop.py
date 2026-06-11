@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from coding_runtime.teammate import TeammateContextBuilder, TeammateManager
-from core.provider import LLMResponse, ToolCall
+from models.provider import LLMResponse, ToolCall
 from sessions import Session
 from tools.executor import ToolExecutor
 from tools.tool_registry import build_teammate_tool_registry

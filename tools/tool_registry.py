@@ -1,69 +1,25 @@
 from dataclasses import dataclass
 from typing import Callable, Any
 
-ALWAYS_ON_TOOLS = {
-    "recall_memory",
-    "memorize",
-    "tool_search",
-}
-
-PRELOADED_TOOLS_BY_MODE = {
-    "bot": {
-        "load_skill",
-        "storage_list_files",
-        "storage_read_file",
-        "storage_write_file",
-        "sandbox_list_files",
-        "sandbox_read_file",
-        "sandbox_write_file",
-        "publish_artifact",
-    },
-    "coding": {
-        "read_file",
-        "load_skill",
-        "task_create",
-        "task_update",
-        "task_list",
-        "task_get",
-        "claim_task",
-        "check_background",
-        "read_inbox",
-        "compact",
-    },
-    "teammate": {
-        "read_file",
-        "load_skill",
-        "task_create",
-        "task_update",
-        "task_list",
-        "task_get",
-        "claim_task",
-        "check_background",
-        "send_message",
-        "read_inbox",
-        "idle",
-        "shutdown_response",
-        "plan_approval_request",
-    },
-}
-
-DEFERRED_TOOLS = {
+from tools.policy import (
+    ALWAYS_ON_TOOLS,
+    DEFERRED_TOOLS,
+    PRELOADED_TOOLS_BY_MODE,
+    UNLOCKED_TOOLS_KEY,
+    ToolPolicy,
+)
+SESSION_SCOPED_TOOLS = {
     "bash",
+    "list_files",
+    "read_file",
     "write_file",
     "edit_file",
-    "background_run",
-    "spawn_teammate",
-    "list_teammates",
-    "broadcast",
-    "shutdown_request",
-    "shutdown_status",
-    "plan_approval",
-    "task",
-    "claim_task",
-}
-
-UNLOCKED_TOOLS_KEY = "unlocked_tools"
-SESSION_SCOPED_TOOLS = {
+    "git_status",
+    "git_diff",
+    "git_log",
+    "git_branch",
+    "git_add",
+    "git_commit",
     "memorize",
     "recall_memory",
     "storage_list_files",
@@ -100,6 +56,7 @@ class ToolSpec:
 class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, ToolSpec] = {}
+        self.policy = ToolPolicy(self)
 
     def register(
         self,
@@ -164,27 +121,7 @@ class ToolRegistry:
         ]
 
     def visible_names_for_turn(self, session, mode: str = "coding") -> set[str]:
-        allowed = {
-            name
-            for name, tool in self._tools.items()
-            if tool.enabled_for(mode, session)
-        }
-        metadata = session.metadata or {}
-        if metadata.get("kind") == "scheduled_agent":
-            approved = {
-                capability.get("tool")
-                for capability in metadata.get("approved_capabilities", [])
-                if isinstance(capability, dict)
-            }
-            return approved & allowed
-        unlocked = set(metadata.get(UNLOCKED_TOOLS_KEY, []))
-        visible = (
-            ALWAYS_ON_TOOLS
-            | {name for name, tool in self._tools.items() if tool.always_on}
-            | PRELOADED_TOOLS_BY_MODE.get(mode, set())
-            | unlocked
-        )
-        return visible & allowed
+        return self.policy.visible_tools(session, mode)
 
     def reset_turn_unlocks(self, session) -> None:
         session.metadata[UNLOCKED_TOOLS_KEY] = []
@@ -226,25 +163,12 @@ class ToolRegistry:
     ) -> str | None:
         if name == "tool_search":
             return None
-        tool = self._tools.get(name)
-        if tool is None:
-            return f"Unknown tool: {name}"
-        if not tool.enabled_for(mode, session):
-            return f"Tool '{name}' is not allowed in {mode} mode."
-        if session is not None and name not in self.visible_names_for_turn(session, mode):
-            return (
-                f"Tool '{name}' is not visible in this turn. "
-                f"Call tool_search with query='select:{name}' first."
-            )
-        return None
+        decision = self.policy.can_execute(name, session=session, mode=mode)
+        return None if decision.allowed else decision.reason
 
     def _tool_search(self, query: str, *, session=None, mode: str = "coding") -> str:
         query = (query or "").strip()
-        allowed = {
-            name
-            for name, tool in self._tools.items()
-            if tool.enabled_for(mode, session)
-        }
+        allowed = self.policy._allowed_names(session=session, mode=mode)
 
         if query.lower().startswith("select:"):
             name = query.split(":", 1)[1].strip()
@@ -335,10 +259,22 @@ def build_teammate_tool_registry(name: str) -> ToolRegistry:
 
 
 def _risk_for_tool(name: str) -> str:
-    if name in {"bash", "write_file", "edit_file", "background_run"}:
+    if name in {
+        "bash",
+        "write_file",
+        "edit_file",
+        "background_run",
+        "git_add",
+        "git_commit",
+    }:
         return "high"
     if name in {
+        "list_files",
         "read_file",
+        "git_status",
+        "git_diff",
+        "git_log",
+        "git_branch",
         "storage_list_files",
         "storage_read_file",
         "sandbox_list_files",
@@ -356,9 +292,16 @@ def _risk_for_tool(name: str) -> str:
 def _modes_for_tool(name: str) -> set[str]:
     coding_tools = {
         "bash",
+        "list_files",
         "read_file",
         "write_file",
         "edit_file",
+        "git_status",
+        "git_diff",
+        "git_log",
+        "git_branch",
+        "git_add",
+        "git_commit",
         "load_skill",
         "task_create",
         "task_update",
@@ -380,9 +323,16 @@ def _modes_for_tool(name: str) -> set[str]:
 
     teammate_tools = {
         "bash",
+        "list_files",
         "read_file",
         "write_file",
         "edit_file",
+        "git_status",
+        "git_diff",
+        "git_log",
+        "git_branch",
+        "git_add",
+        "git_commit",
         "load_skill",
         "task_create",
         "task_update",

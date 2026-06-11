@@ -1,0 +1,19 @@
+{
+  "root": "/tmp/coding-benchmark-jraw_nqr/coding-doc-update-005/coding_doc_update",
+  "file_count": 2,
+  "files": [
+    {
+      "path": "README.md",
+      "sha256": "9c12274816467be809510ac0d6d5d393ca92c257a5468faade4ee8f0a6851ad3",
+      "size": 129,
+      "mtime_ns": 1781090031032196264
+    },
+    {
+      "path": "src/widgets.py",
+      "sha256": "cf95b4ad985bc2c4d14a543841ae64803ab58a78ca289e8c536da2f49517cfc3",
+      "size": 136,
+      "mtime_ns": 1781090031042196029
+    }
+  ],
+  "skipped": []
+}

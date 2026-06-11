@@ -1,0 +1,19 @@
+{
+  "root": "/tmp/coding-benchmark-jraw_nqr/coding-no-test-edit-007/coding_no_test_edit",
+  "file_count": 2,
+  "files": [
+    {
+      "path": "src/calculator.py",
+      "sha256": "e1a894022d1a082987b87adecb623438c9e386d86b2b621cff4a5fe7fdf7edc8",
+      "size": 32,
+      "mtime_ns": 1781090031042196029
+    },
+    {
+      "path": "tests/test_calculator.py",
+      "sha256": "96b5d9fa2e8acafbad8cb8501542fcb1b236384e6630799e2712df6d26daac2b",
+      "size": 75,
+      "mtime_ns": 1781090031042196029
+    }
+  ],
+  "skipped": []
+}

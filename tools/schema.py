@@ -34,6 +34,20 @@ BASE_TOOLS = [
         ["command"],
     ),
     function_tool(
+        "list_files",
+        "List files and directories inside the current coding workspace.",
+        {
+            "path": {
+                "type": "string",
+                "description": "Optional relative directory path. Defaults to workspace root.",
+            },
+            "recursive": {
+                "type": "boolean",
+                "description": "Recursively list files when true. Defaults to false.",
+            },
+        },
+    ),
+    function_tool(
         "read_file",
         "Read UTF-8 file contents. Optionally limit the number of lines.",
         {
@@ -81,6 +95,81 @@ BASE_TOOLS = [
             },
         },
         ["path", "old_text", "new_text"],
+    ),
+]
+
+
+GIT_TOOLS = [
+    function_tool(
+        "git_status",
+        "Show git working tree status for the current coding workspace.",
+        {
+            "porcelain": {
+                "type": "boolean",
+                "description": "Return porcelain status when true. Defaults to false.",
+            },
+        },
+    ),
+    function_tool(
+        "git_diff",
+        "Show git diff for the current coding workspace. Supports staged or unstaged diff.",
+        {
+            "path": {
+                "type": "string",
+                "description": "Optional relative path to limit the diff.",
+            },
+            "staged": {
+                "type": "boolean",
+                "description": "Show staged diff when true. Defaults to false.",
+            },
+            "stat": {
+                "type": "boolean",
+                "description": "Show diff stat instead of full patch when true. Defaults to false.",
+            },
+        },
+    ),
+    function_tool(
+        "git_log",
+        "Show recent git commits for the current coding workspace.",
+        {
+            "max_count": {
+                "type": "integer",
+                "description": "Maximum commits to show. Defaults to 10, capped at 50.",
+            },
+        },
+    ),
+    function_tool(
+        "git_branch",
+        "Show the current git branch, or all local branches.",
+        {
+            "all": {
+                "type": "boolean",
+                "description": "List all local branches when true. Defaults to false.",
+            },
+        },
+    ),
+    function_tool(
+        "git_add",
+        "Stage workspace files for commit. Paths must be relative and stay inside the workspace.",
+        {
+            "paths": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Relative paths to stage.",
+            },
+        },
+        ["paths"],
+    ),
+    function_tool(
+        "git_commit",
+        "Create a git commit for already staged changes in the current coding workspace.",
+        {
+            "message": {
+                "type": "string",
+                "description": "Commit message.",
+            },
+        },
+        ["message"],
     ),
 ]
 
@@ -568,6 +657,7 @@ SEARCH_TOOLS = [
 # Team-oriented tool sets.
 TEAMMATE_TOOLS = (
     BASE_TOOLS
+    + GIT_TOOLS
     + SKILL_TOOLS
     + TASK_TOOLS
     + BACKGROUND_TOOLS

@@ -37,6 +37,20 @@ class TurnResult:
     reply: str = ""
 
 
+@dataclass
+class RunContext:
+    run_state: Any
+    session: Any
+    run_dir: Path | None = None
+    report: dict | None = None
+
+
+@dataclass
+class EvalContext:
+    eval_dir: Path
+    payload: dict
+
+
 class Plugin:
     name: str = "plugin"
 
@@ -53,4 +67,10 @@ class Plugin:
         return None
 
     def after_turn(self, context: TurnContext, reply: str) -> None:
+        return None
+
+    def after_run(self, context: RunContext) -> None:
+        return None
+
+    def after_eval(self, context: EvalContext) -> None:
         return None

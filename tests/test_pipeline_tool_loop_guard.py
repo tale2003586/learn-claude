@@ -1,8 +1,8 @@
 import unittest
 from types import SimpleNamespace
 
-from core.pipeline import Pipeline
-from core.provider import LLMResponse, ToolCall
+from runtime.pipeline import Pipeline
+from models.provider import LLMResponse, ToolCall
 from sessions.session import Session
 from tools.executor import ToolExecutor
 from tools.hooks import ToolLoopGuardHook
@@ -145,7 +145,8 @@ class PipelineToolLoopGuardTests(unittest.TestCase):
 
         self.assertEqual("completed", reply)
         self.assertEqual(3, provider.calls)
-        self.assertEqual([{"command": "pwd"}], bash_calls)
+        self.assertEqual("pwd", bash_calls[0]["command"])
+        self.assertIs(session, bash_calls[0]["_session"])
         self.assertEqual(["bash"], session.metadata["unlocked_tools"])
 
     def test_tool_loop_hook_denial_stops_turn(self) -> None:

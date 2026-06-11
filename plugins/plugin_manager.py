@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Iterable
 
-from .base import Plugin, PluginContext, TurnContext, TurnResult
+from .base import EvalContext, Plugin, PluginContext, RunContext, TurnContext, TurnResult
 
 
 class PluginManager:
@@ -69,6 +69,28 @@ class PluginManager:
         context = TurnContext(inbound=inbound, session=session)
         for plugin in self.plugins:
             plugin.after_turn(context, reply)
+
+    def after_run(
+        self,
+        *,
+        run_state,
+        session,
+        run_dir: Path | None = None,
+        report: dict | None = None,
+    ) -> None:
+        context = RunContext(
+            run_state=run_state,
+            session=session,
+            run_dir=run_dir,
+            report=report,
+        )
+        for plugin in self.plugins:
+            plugin.after_run(context)
+
+    def after_eval(self, *, eval_dir: Path, payload: dict) -> None:
+        context = EvalContext(eval_dir=eval_dir, payload=payload)
+        for plugin in self.plugins:
+            plugin.after_eval(context)
 
     def status_text(self) -> str:
         if not self.loaded_names:

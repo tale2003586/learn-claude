@@ -1,0 +1,19 @@
+{
+  "root": "/tmp/coding-benchmark-jraw_nqr/coding-add-feature-003/coding_add_feature",
+  "file_count": 2,
+  "files": [
+    {
+      "path": "src/string_tools.py",
+      "sha256": "bfe6d231e4bf7a688caeab77cf5ea11b6a42befa92047b18a45691b57d2f75b8",
+      "size": 61,
+      "mtime_ns": 1781090031032196264
+    },
+    {
+      "path": "tests/test_string_tools.py",
+      "sha256": "698b9af7c481072f8205c107b62b36ac8562b150a7938c7213f1f5df6dc4fa6b",
+      "size": 128,
+      "mtime_ns": 1781090031032196264
+    }
+  ],
+  "skipped": []
+}

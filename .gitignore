@@ -7,9 +7,9 @@ __pycache__/
 .tasks/
 .team/
 .transcripts/
-.scheduler/
 .gateway/
 .users/
+.runs/
 storage/
 memory/RECENT_CONTEXT.json
 memory/*.md

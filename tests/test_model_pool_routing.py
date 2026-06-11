@@ -2,9 +2,9 @@ import json
 import unittest
 from types import SimpleNamespace
 
-from core.model_pool import ModelPool, ModelProfile, build_model_pool_from_env
-from core.pipeline import Pipeline
-from core.provider import LLMResponse, OpenAICompatibleProvider
+from models.model_pool import ModelPool, ModelProfile, build_model_pool_from_env
+from runtime.pipeline import Pipeline
+from models.provider import LLMResponse, OpenAICompatibleProvider
 from sessions.session import Session
 from tools.executor import ToolExecutor
 
@@ -124,6 +124,87 @@ class RoutedModelProviderTests(unittest.TestCase):
         self.assertEqual(1, primary.calls)
         self.assertEqual("backup-model", backup.calls[0]["model"])
 
+    def test_health_check_failure_switches_active_model(self) -> None:
+        pool = ModelPool(
+            profiles={
+                "primary": ModelProfile(
+                    name="primary",
+                    provider="custom",
+                    api_key="p",
+                    base_url="https://primary.example",
+                    model="primary-model",
+                ),
+                "backup": ModelProfile(
+                    name="backup",
+                    provider="custom",
+                    api_key="b",
+                    base_url="https://backup.example",
+                    model="backup-model",
+                ),
+            },
+            routes={"chat": ("primary", "backup")},
+            default_profile="primary",
+            failure_threshold=1,
+            failure_cooldown_seconds=60,
+        )
+        pool._providers["primary"] = FailingProvider()
+        pool._providers["backup"] = RecordingProvider("ok")
+
+        result = pool.health_check_profile("primary")
+
+        self.assertEqual("failed", result["status"])
+        self.assertFalse(pool.profile_available("primary"))
+        self.assertEqual("backup-model", pool.model_for("chat"))
+
+    def test_unhealthy_primary_is_skipped_until_cooldown_expires(self) -> None:
+        pool = ModelPool(
+            profiles={
+                "primary": ModelProfile(
+                    name="primary",
+                    provider="custom",
+                    api_key="p",
+                    base_url="https://primary.example",
+                    model="primary-model",
+                ),
+                "backup": ModelProfile(
+                    name="backup",
+                    provider="custom",
+                    api_key="b",
+                    base_url="https://backup.example",
+                    model="backup-model",
+                ),
+            },
+            routes={"chat": ("primary", "backup")},
+            default_profile="primary",
+            failure_threshold=1,
+            failure_cooldown_seconds=60,
+        )
+        primary = FailingProvider()
+        backup = RecordingProvider("ok")
+        pool._providers["primary"] = primary
+        pool._providers["backup"] = backup
+
+        first = pool.routed_provider("chat").chat(
+            model="primary-model",
+            messages=[],
+            tools=[],
+            tool_choice="none",
+            max_tokens=100,
+        )
+        second = pool.routed_provider("chat").chat(
+            model="primary-model",
+            messages=[],
+            tools=[],
+            tool_choice="none",
+            max_tokens=100,
+        )
+
+        self.assertEqual("ok", first.content)
+        self.assertEqual("ok", second.content)
+        self.assertEqual(1, primary.calls)
+        self.assertEqual(2, len(backup.calls))
+        self.assertEqual("backup-model", backup.calls[1]["model"])
+
     def test_stream_fallback_only_before_text_is_emitted(self) -> None:
         pool = ModelPool(
             profiles={
@@ -212,25 +293,6 @@ class PipelineModelRoutingTests(unittest.TestCase):
         self.assertEqual("reply from coding", reply)
         self.assertEqual("coding-model", model_pool.providers["coding"].calls[0]["model"])
 
-    def test_pipeline_uses_scheduled_agent_route_for_scheduled_sessions(self) -> None:
-        model_pool = FakeModelPool()
-        pipeline = _pipeline_with_pool(model_pool)
-        session = Session(
-            id="task:scheduled",
-            current_mode="coding",
-            metadata={"kind": "scheduled_agent"},
-        )
-        session.add_message("user", "scheduled task")
-
-        reply = pipeline.run(session, SimpleNamespace(tool_mode="coding"))
-
-        self.assertEqual("reply from scheduled_agent", reply)
-        self.assertEqual(
-            "scheduled_agent-model",
-            model_pool.providers["scheduled_agent"].calls[0]["model"],
-        )
-
-
 class RecordingProvider:
     def __init__(self, content: str) -> None:
         self.content = content
@@ -313,6 +375,37 @@ def _pipeline_with_pool(model_pool) -> Pipeline:
         tool_executor=ToolExecutor([]),
         context_builder=FakeContextBuilder(),
     )
+
+
+class ChatCompletionsProviderTests(unittest.TestCase):
+    def test_chat_provider_drops_empty_assistant_messages(self) -> None:
+        client = FakeChatClient("ok")
+        provider = OpenAICompatibleProvider(client)
+
+        response = provider.chat(
+            model="chat-test",
+            messages=[
+                {"role": "user", "content": "first"},
+                {"role": "assistant", "content": None},
+                {"role": "assistant", "content": ""},
+                {"role": "assistant", "content": None, "tool_calls": [{
+                    "id": "call_prev",
+                    "type": "function",
+                    "function": {"name": "old_tool", "arguments": "{}"},
+                }]},
+                {"role": "tool", "tool_call_id": "call_prev", "content": "done"},
+                {"role": "user", "content": "next"},
+            ],
+            tools=[],
+            tool_choice="none",
+            max_tokens=20,
+        )
+
+        sent_messages = client.chat.completions.calls[0]["messages"]
+        self.assertEqual("ok", response.content)
+        self.assertNotIn({"role": "assistant", "content": None}, sent_messages)
+        self.assertNotIn({"role": "assistant", "content": ""}, sent_messages)
+        self.assertEqual("old_tool", sent_messages[1]["tool_calls"][0]["function"]["name"])
 
 
 class ResponsesProviderTests(unittest.TestCase):
@@ -415,6 +508,42 @@ class FakeResponsesEndpoint:
 class FakeResponsesClient:
     def __init__(self, response) -> None:
         self.responses = FakeResponsesEndpoint(response)
+
+
+class FakeChatMessage:
+    def __init__(self, content: str) -> None:
+        self.content = content
+        self.tool_calls = []
+
+    def model_dump(self, exclude_none: bool = False):
+        return {"role": "assistant", "content": self.content}
+
+
+class FakeChatChoice:
+    def __init__(self, content: str) -> None:
+        self.message = FakeChatMessage(content)
+
+
+class FakeChatResponse:
+    def __init__(self, content: str) -> None:
+        self.choices = [FakeChatChoice(content)]
+
+
+class FakeChatCompletions:
+    def __init__(self, content: str) -> None:
+        self.content = content
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return FakeChatResponse(self.content)
+
+
+class FakeChatClient:
+    def __init__(self, content: str) -> None:
+        self.chat = SimpleNamespace(
+            completions=FakeChatCompletions(content),
+        )
 
 
 if __name__ == "__main__":

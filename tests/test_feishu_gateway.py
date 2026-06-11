@@ -10,7 +10,6 @@ from bus.events import OutboundMessage
 from gateway.feishu.adapter import FeishuGateway
 from gateway.feishu.identity import FeishuIdentity, FeishuIdentityResolver
 from gateway.feishu.store import FeishuGatewayStore
-from scheduler_worker import FeishuScheduleNotifier
 
 
 class FakeBus:
@@ -203,38 +202,6 @@ class FeishuGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("oc_chat", self.client.documents[0]["chat_id"])
         self.assertEqual("daily", self.client.documents[0]["caption"])
         self.assertFalse(self.store.list_pending_messages())
-
-
-class FeishuSchedulerNotifierTests(unittest.TestCase):
-    def test_feishu_notifier_enqueues_report_and_document(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            report = root / "storage" / "reports" / "daily.md"
-            report.parent.mkdir(parents=True)
-            report.write_text("# Daily\n\nAI news.", encoding="utf-8")
-            store = FeishuGatewayStore(root / ".gateway" / "feishu.db")
-            notifier = FeishuScheduleNotifier(store=store, workspace=root)
-            try:
-                with patch.dict("os.environ", {"FEISHU_NOTIFY_CHAT_IDS": "oc_chat"}, clear=True):
-                    notifier.notify(
-                        {"id": 1, "name": "daily-ai"},
-                        {
-                            "status": "success",
-                            "run_id": 7,
-                            "report_path": "storage/reports/daily.md",
-                        },
-                    )
-
-                pending = store.list_pending_messages()
-                self.assertEqual(2, len(pending))
-                self.assertEqual("oc_chat", pending[0]["chat_id"])
-                self.assertEqual("text", pending[0]["message_type"])
-                self.assertIn("定时任务完成：daily-ai", pending[0]["text"])
-                self.assertIn("AI news.", pending[0]["text"])
-                self.assertEqual("document", pending[1]["message_type"])
-                self.assertEqual("storage/reports/daily.md", pending[1]["document_path"])
-            finally:
-                store.close()
 
 
 def _message_event(

@@ -14,6 +14,7 @@ from coding_runtime.background_task import BG
 from config import WORKDIR
 from bus.team_bus import BUS
 from memory.store import MemoryStore
+from runtime.workspace import safe_workspace_path, workspace_root_for_session
 from coding_runtime.protocols import PROTOCOLS
 from skill_runtime import SKILL_LOADER
 from coding_runtime.task import TASKS
@@ -24,15 +25,45 @@ from user_scope import (
 )
 
 
-def safe_path(p: str) -> Path:
-    path = (WORKDIR / p).resolve()
-    if not path.is_relative_to(WORKDIR):
-        raise ValueError(f"Path escapes workspace: {p}")
-    return path
+def safe_path(p: str, *, session=None) -> Path:
+    return safe_workspace_path(p, session=session)
 
-def run_read(path: str, limit: int = None) -> str:
+
+def run_list_files(path: str = "", recursive: bool = False, *, _session=None) -> str:
     try:
-        text = safe_path(path).read_text()
+        root = workspace_root_for_session(_session).resolve()
+        target = safe_workspace_path(path or ".", session=_session)
+        if not target.exists():
+            raise FileNotFoundError(f"Directory not found: {path}")
+        if not target.is_dir():
+            raise NotADirectoryError(f"Path is not a directory: {path}")
+        entries = []
+        iterator = target.rglob("*") if recursive else target.iterdir()
+        for child in sorted(iterator, key=lambda item: item.relative_to(root).as_posix()):
+            rel_parts = child.relative_to(root).parts
+            if any(part.startswith(".") for part in rel_parts):
+                continue
+            if "__pycache__" in rel_parts:
+                continue
+            entries.append({
+                "path": child.relative_to(root).as_posix(),
+                "type": "dir" if child.is_dir() else "file",
+            })
+            if len(entries) >= 500:
+                break
+        return json.dumps({
+            "path": "" if target == root else target.relative_to(root).as_posix(),
+            "recursive": bool(recursive),
+            "entries": entries,
+            "truncated": len(entries) >= 500,
+        }, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def run_read(path: str, limit: int = None, *, _session=None) -> str:
+    try:
+        text = safe_path(path, session=_session).read_text()
         lines = text.splitlines()
         if limit and limit < len(lines):
             lines = lines[:limit] + [f"... ({len(lines) - limit} more lines)"]
@@ -40,18 +71,18 @@ def run_read(path: str, limit: int = None) -> str:
     except Exception as e:
         return f"Error: {e}"
     
-def run_write(path: str, content: str) -> str:
+def run_write(path: str, content: str, *, _session=None) -> str:
     try:
-        fp = safe_path(path)
+        fp = safe_path(path, session=_session)
         fp.parent.mkdir(parents=True, exist_ok=True)
         fp.write_text(content)
         return f"Wrote {len(content)} bytes to {path}"
     except Exception as e:
         return f"Error: {e}"
     
-def run_edit(path: str, old_text: str, new_text: str) -> str:
+def run_edit(path: str, old_text: str, new_text: str, *, _session=None) -> str:
     try:
-        fp = safe_path(path)
+        fp = safe_path(path, session=_session)
         content = fp.read_text()
         if old_text not in content:
             return f"Error: Text not found in {path}"
@@ -66,6 +97,7 @@ MAX_STORAGE_WRITE_BYTES = 10 * 1024 * 1024
 MAX_STORAGE_LIST_ENTRIES = 500
 MAX_STORAGE_READ_CHARS = 50_000
 MAX_PUBLISHED_ARTIFACT_BYTES = 50 * 1024 * 1024
+MAX_GIT_OUTPUT_CHARS = 50_000
 DEFAULT_SANDBOX_TTL_HOURS = 168
 STORAGE_TEXT_SUFFIXES = {
     ".csv",
@@ -127,6 +159,131 @@ def _scope_relative(root: Path, path: Path) -> str:
     return path.relative_to(root).as_posix()
 
 
+def _git_workspace(session=None) -> Path:
+    root = workspace_root_for_session(session).resolve()
+    if not (root / ".git").exists():
+        raise ValueError(f"Workspace is not a git repository root: {root}")
+    return root
+
+
+def _run_git(args: list[str], *, _session=None) -> str:
+    root = _git_workspace(_session)
+    result = subprocess.run(
+        ["git", *args],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    output = (result.stdout + result.stderr).strip()
+    if result.returncode != 0:
+        return f"Error: git {' '.join(args)} failed with code {result.returncode}\n{output}"
+    return output[:MAX_GIT_OUTPUT_CHARS] if output else "(no output)"
+
+
+def _git_pathspec(path: str, *, _session=None) -> str:
+    raw = str(path or "").strip()
+    if raw.startswith(":"):
+        raise ValueError(f"Git pathspec magic is not allowed: {path}")
+    target = safe_workspace_path(path, session=_session)
+    root = workspace_root_for_session(_session).resolve()
+    if target == root:
+        raise ValueError("Git path must point to a file or subdirectory, not workspace root.")
+    return target.relative_to(root).as_posix()
+
+
+def _git_pathspecs(paths, *, _session=None) -> list[str]:
+    if not isinstance(paths, list) or not paths:
+        raise ValueError("paths must be a non-empty list.")
+    return [_git_pathspec(str(path), _session=_session) for path in paths]
+
+
+def run_git_status(porcelain: bool = False, *, _session=None) -> str:
+    try:
+        args = ["status", "--short"] if porcelain else ["status", "--branch", "--short"]
+        return _run_git(args, _session=_session)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def run_git_diff(
+    path: str = "",
+    staged: bool = False,
+    stat: bool = False,
+    *,
+    _session=None,
+) -> str:
+    try:
+        args = ["diff"]
+        if staged:
+            args.append("--staged")
+        if stat:
+            args.append("--stat")
+        if path:
+            args.extend(["--", _git_pathspec(path, _session=_session)])
+        return _run_git(args, _session=_session)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def run_git_log(max_count: int = 10, *, _session=None) -> str:
+    try:
+        try:
+            count = max(1, min(int(max_count or 10), 50))
+        except (TypeError, ValueError):
+            count = 10
+        return _run_git(
+            [
+                "log",
+                f"--max-count={count}",
+                "--date=iso",
+                "--pretty=format:%h %ad %an %s",
+            ],
+            _session=_session,
+        )
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def run_git_branch(all: bool = False, *, _session=None) -> str:
+    try:
+        args = ["branch"]
+        if all:
+            args.append("--all")
+        return _run_git(args, _session=_session)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def run_git_add(paths, *, _session=None) -> str:
+    try:
+        pathspecs = _git_pathspecs(paths, _session=_session)
+        return _run_git(["add", "--", *pathspecs], _session=_session)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def run_git_commit(message: str, *, _session=None) -> str:
+    try:
+        cleaned = str(message or "").strip()
+        if not cleaned:
+            raise ValueError("Commit message is required.")
+        return _run_git(
+            [
+                "-c",
+                "user.name=Agent Runtime",
+                "-c",
+                "user.email=agent@example.invalid",
+                "commit",
+                "-m",
+                cleaned,
+            ],
+            _session=_session,
+        )
+    except Exception as e:
+        return f"Error: {e}"
+
+
 def _sandbox_scope_root(session, *, create: bool = True) -> Path:
     if session is None or not str(getattr(session, "id", "")).strip():
         raise ValueError("Sandbox tools require an active session.")
@@ -134,7 +291,7 @@ def _sandbox_scope_root(session, *, create: bool = True) -> Path:
     cleanup_expired_sandboxes()
     metadata = getattr(session, "metadata", {}) or {}
     sandbox_root = _sandbox_root()
-    if metadata.get("kind") in {"task_session", "scheduled_agent"}:
+    if metadata.get("kind") == "task_session":
         task_id = str(metadata.get("task_id", "")).strip()
         if not re.fullmatch(r"[a-zA-Z0-9_-]{1,100}", task_id):
             raise ValueError("Task session has an invalid task_id for sandbox scope.")
@@ -496,12 +653,13 @@ def run_publish_artifact(
         return f"Error: {e}"
 
 
-def run_bash(command: str) -> str:
+def run_bash(command: str, *, _session=None) -> str:
     dangerous = ["rm -rf /", "sudo", "shutdown", "reboot", "> /dev/"]
     if any(d in command for d in dangerous):
         return "Error: Dangerous command blocked"
     try:
-        r = subprocess.run(command, shell=True, cwd=os.getcwd(),
+        workspace = workspace_root_for_session(_session)
+        r = subprocess.run(command, shell=True, cwd=workspace,
                            capture_output=True, text=True, timeout=120)
         out = (r.stdout + r.stderr).strip()
         return out[:50000] if out else "(no output)"
@@ -512,11 +670,55 @@ def run_bash(command: str) -> str:
     
 
 BASE_HANDLERS = {
-    "bash": lambda **kw: run_bash(kw["command"]),
+    "bash": lambda **kw: run_bash(kw["command"], _session=kw.get("_session")),
     "load_skill": lambda **kw: SKILL_LOADER.get_content(kw["name"]),
-    "read_file": lambda **kw: run_read(kw["path"], kw.get("limit")),
-    "write_file": lambda **kw: run_write(kw["path"], kw["content"]),
-    "edit_file": lambda **kw: run_edit(kw["path"], kw["old_text"], kw["new_text"]),
+    "list_files": lambda **kw: run_list_files(
+        kw.get("path", ""),
+        kw.get("recursive", False),
+        _session=kw.get("_session"),
+    ),
+    "read_file": lambda **kw: run_read(
+        kw["path"],
+        kw.get("limit"),
+        _session=kw.get("_session"),
+    ),
+    "write_file": lambda **kw: run_write(
+        kw["path"],
+        kw["content"],
+        _session=kw.get("_session"),
+    ),
+    "edit_file": lambda **kw: run_edit(
+        kw["path"],
+        kw["old_text"],
+        kw["new_text"],
+        _session=kw.get("_session"),
+    ),
+    "git_status": lambda **kw: run_git_status(
+        kw.get("porcelain", False),
+        _session=kw.get("_session"),
+    ),
+    "git_diff": lambda **kw: run_git_diff(
+        kw.get("path", ""),
+        kw.get("staged", False),
+        kw.get("stat", False),
+        _session=kw.get("_session"),
+    ),
+    "git_log": lambda **kw: run_git_log(
+        kw.get("max_count", 10),
+        _session=kw.get("_session"),
+    ),
+    "git_branch": lambda **kw: run_git_branch(
+        kw.get("all", False),
+        _session=kw.get("_session"),
+    ),
+    "git_add": lambda **kw: run_git_add(
+        kw["paths"],
+        _session=kw.get("_session"),
+    ),
+    "git_commit": lambda **kw: run_git_commit(
+        kw["message"],
+        _session=kw.get("_session"),
+    ),
 }
 
 TASK_HANDLERS = {
@@ -645,7 +847,7 @@ TASK_MEMORY_ROOT = (WORKDIR / ".task_sessions").resolve()
 
 def memory_store_for_session(session=None) -> MemoryStore:
     metadata = getattr(session, "metadata", {}) or {}
-    if metadata.get("kind") not in {"task_session", "scheduled_agent"}:
+    if metadata.get("kind") != "task_session":
         if explicit_user_id_for_session(session) is None:
             return MEMORY
         return MemoryStore(memory_root_for_session(WORKDIR, session))

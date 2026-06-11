@@ -9,7 +9,7 @@ from unittest.mock import patch
 import httpx
 
 from bus.events import InboundMessage, OutboundMessage
-from core.agent_loop import AgentLoop
+from runtime.agent_loop import AgentLoop
 from gateway.telegram.adapter import TelegramGateway
 from gateway.telegram.client import TelegramBotApiClient, split_telegram_text
 from gateway.telegram.identity import TelegramIdentityResolver

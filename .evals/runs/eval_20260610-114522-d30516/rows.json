@@ -1,0 +1,95 @@
+[
+  {
+    "id": "coding-git-diff-008",
+    "category": "git",
+    "runner_mode": "real",
+    "status": "pass",
+    "passed": true,
+    "failure_category": "",
+    "failure_reason": "",
+    "prompt": "先列出 workspace 文件，找到版本号定义，把版本号升级到 0.2.0，并使用 git 工具查看 diff。",
+    "workspace_relpath": "coding-git-diff-008/coding_git_diff",
+    "workspace_path": "/tmp/coding-benchmark-pbn6qhi8/coding-git-diff-008/coding_git_diff",
+    "run_id": "run_20260610-114522-b1b49a",
+    "run_dir": ".evals/runs/eval_20260610-114522-d30516/runs/run_20260610-114522-b1b49a",
+    "allowed_tools": [
+      "list_files",
+      "read_file",
+      "edit_file",
+      "git_status",
+      "git_diff"
+    ],
+    "step_budget": 9,
+    "reasoning_steps": 6,
+    "tool_calls": 7,
+    "within_budget": true,
+    "verifier_passed": true,
+    "workspace_diff_passed": true,
+    "trace_passed": true,
+    "run_status": "completed",
+    "final_answer": "[TaskSession `coding-a7db1307` completed]\n\n已完成：\n\n- 已列出 workspace 文件并定位版本号定义：`src/version.py:1`\n- 已将 `VERSION` 从 `\"0.1.0\"` 升级到 `\"0.2.0\"`\n- 已使用 git 工具查看 diff，当前仅修改了 `src/version.py`\n\nDiff 确认：\n\n```diff\n-VERSION = \"0.1.0\"\n+VERSION = \"0.2.0\"\n```\n\nPromoted 2 task memory item(s) to global PENDING.md.\n\nTask log: `.task_sessions/coding-a7db1307/TASK_LOG.md`\nConclusions: `.task_sessions/coding-a7db1307/CONCLUSIONS.json`",
+    "error": "",
+    "verifier": {
+      "passed": true,
+      "checks": [
+        {
+          "name": "modified",
+          "path": "src/version.py",
+          "passed": true
+        },
+        {
+          "name": "file_contains",
+          "path": "src/version.py",
+          "needle": "0.2.0",
+          "passed": true
+        },
+        {
+          "name": "trace_event_exists",
+          "event": "workspace.resolved",
+          "passed": true
+        },
+        {
+          "name": "trace_event_exists",
+          "event": "workspace.diff.written",
+          "passed": true
+        },
+        {
+          "name": "tool_called",
+          "tool": "list_files",
+          "passed": true
+        },
+        {
+          "name": "tool_called",
+          "tool": "git_status",
+          "passed": true
+        },
+        {
+          "name": "tool_called",
+          "tool": "git_diff",
+          "passed": true
+        },
+        {
+          "name": "tool_called",
+          "tool": "edit_file",
+          "passed": true
+        },
+        {
+          "name": "run_status_completed",
+          "passed": true,
+          "status": "completed"
+        }
+      ],
+      "workspace_diff_summary": {
+        "created": 0,
+        "modified": 1,
+        "deleted": 0,
+        "before_files": 1,
+        "after_files": 1,
+        "before_skipped": 0,
+        "after_skipped": 0
+      },
+      "run_status": "completed"
+    },
+    "duration_ms": 39481.88
+  }
+]

@@ -4,19 +4,19 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from core.provider import LLMResponse, OpenAICompatibleProvider
+from models.provider import LLMResponse, OpenAICompatibleProvider
 from memory.store import MemoryStore
 from sessions.session import Session, SessionManager
-from tasksessions.artifacts import TaskArtifactWriter
-from tasksessions.conclusions import (
+from agents.coding.artifacts import TaskArtifactWriter
+from agents.coding.conclusions import (
     ConclusionCandidate,
     ConclusionExtraction,
     TaskConclusionExtractor,
 )
-from tasksessions.memory_lifecycle import TaskMemoryLifecycle
-from tasksessions.promotion import PromotionResult, TaskMemoryPromoter
-from tasksessions.runner import TaskSessionRunner
-from tasksessions.session import TaskSessionFactory, TaskSessionRecord
+from agents.coding.memory_lifecycle import TaskMemoryLifecycle
+from agents.coding.promotion import PromotionResult, TaskMemoryPromoter
+from agents.coding.runner import TaskSessionRunner
+from agents.coding.session import TaskSessionFactory, TaskSessionRecord
 
 
 class RecordingProvider:

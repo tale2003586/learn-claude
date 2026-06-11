@@ -40,8 +40,14 @@ class FileWriteScopeHook(ToolHook):
         if not isinstance(raw_path, str) or not raw_path.strip():
             return HookOutcome(deny_reason="Error: Missing file path.")
 
-        target = (self.workspace / raw_path).resolve()
-        if not target.is_relative_to(self.workspace):
+        metadata = request.metadata or {}
+        workspace = (
+            Path(str(metadata.get("workspace_root"))).expanduser().resolve()
+            if metadata.get("workspace_root")
+            else self.workspace
+        )
+        target = (workspace / raw_path).resolve()
+        if not target.is_relative_to(workspace):
             return HookOutcome(
                 deny_reason=f"Error: Write path escapes workspace: {raw_path}"
             )

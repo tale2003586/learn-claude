@@ -1,10 +1,10 @@
 import unittest
 
-from core.provider import LLMResponse
+from models.provider import LLMResponse
 from modes.bot import BOT_PROFILE
 from modes.coding import CODING_PROFILE
 from modes.hybrid_classifier import HybridModeClassifier
-from modes.router import ModeRouter
+from runtime.routing.router import ModeRouter
 from sessions.session import Session
 
 
@@ -46,21 +46,6 @@ class ModeRouterHybridClassificationTests(unittest.TestCase):
         self.assertEqual("task_session", route.execution)
         self.assertEqual("coding", session.metadata["last_route"]["intent"])
         self.assertEqual(["请修改 Python 文件并运行测试"], classifier.calls)
-
-    def test_scheduler_request_stays_in_bot_and_skips_classifier(self) -> None:
-        classifier = RecordingClassifier(True)
-        session = Session(id="web:default")
-
-        route = ModeRouter(hybrid_classifier=classifier).route(
-            session,
-            "请立即运行一次当前任务并把日报发给我",
-        )
-
-        self.assertIs(BOT_PROFILE, route.profile)
-        self.assertEqual("scheduler", route.intent)
-        self.assertEqual("pipeline_bot", route.execution)
-        self.assertEqual([], classifier.calls)
-        self.assertEqual("scheduler", session.metadata["last_route"]["intent"])
 
     def test_storage_request_stays_in_bot_and_skips_classifier(self) -> None:
         classifier = RecordingClassifier(True)

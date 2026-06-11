@@ -135,7 +135,7 @@ web/server.py
   -> AgentService.ensure_started()
   -> AgentService._run_loop()
   -> AgentService._start_async()
-  -> from core.bootstrap import build_runtime
+  -> from runtime.bootstrap import build_runtime
   -> build_runtime()
   -> runtime.bus.subscribe_outbound("web", self._handle_outbound)
   -> runtime.start()

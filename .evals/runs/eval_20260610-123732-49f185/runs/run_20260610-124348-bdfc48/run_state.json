@@ -1,0 +1,29 @@
+{
+  "run_id": "run_20260610-124348-bdfc48",
+  "session_id": "web:benchmark:coding-repeat-tool-010",
+  "channel": "benchmark",
+  "chat_id": "coding-repeat-tool-010",
+  "user_id": "benchmark",
+  "user_role": "admin",
+  "mode": "coding",
+  "execution_path": "task_session",
+  "status": "failed",
+  "reasoning_steps": 1,
+  "tool_calls": 0,
+  "last_tool": null,
+  "stop_reason": null,
+  "started_at": "2026-06-10T12:43:48.008944+00:00",
+  "finished_at": "2026-06-10T12:43:49.509144+00:00",
+  "final_answer": null,
+  "error": "ModelRouteError: All model providers failed for purpose 'coding': openai_relay: InternalServerError: Error code: 503 - {'error': {'message': 'Service temporarily unavailable', 'type': 'api_error'}}",
+  "intent": "",
+  "profile": "",
+  "metadata": {
+    "benchmark_task_id": "coding-repeat-tool-010",
+    "task_session": {
+      "task_id": "coding-b734b12b",
+      "task_session_id": "task:coding-b734b12b",
+      "status": "running"
+    }
+  }
+}

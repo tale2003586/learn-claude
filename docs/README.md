@@ -7,6 +7,12 @@
 - [当前代码目录总结](overview/CODEBASE_SUMMARY.md)
 - [Project Structure](overview/PROJECT_STRUCTURE.md)
 - [课堂代码演示详稿](overview/CLASS_DEMO_SCRIPT.md)
+- [taleclaw Runtime Platform 与 Coding Agent](overview/PLATFORM_AND_CODING_AGENT.md)
+- [taleclaw Coding Agent](overview/CODING_AGENT.md)
+
+## System Design
+
+- [系统设计专题文档](system-design/README.md)
 
 ## Runtime
 
@@ -14,6 +20,7 @@
 - [Agent Loop 不可见工具循环保护修复记录](runtime/AGENT_LOOP_UNAVAILABLE_TOOL_GUARD.md)
 - [Hybrid 模式：关键词预筛选与 LLM 路由改动记录](runtime/HYBRID_MODE_LLM_ROUTING.md)
 - [Model Provider Pool and Route Selection](runtime/MODEL_PROVIDER_POOL_ROUTING.md)
+- [Model Provider 健康检查与自动切换完成记录](workplan/2026-06-11_MODEL_PROVIDER_HEALTH_FAILOVER_COMPLETION.md)
 
 ## Sessions And Memory
 
@@ -31,13 +38,6 @@
 - [Bot 模式受限文件区第一阶段改动记录](tools-plugins/BOT_STORAGE_ARTIFACT_TOOLS.md)
 - [Bot 临时沙盒与显式发布改动记录](tools-plugins/BOT_TASK_SANDBOX_AND_PUBLISH.md)
 - [Markdown 转 PDF 插件改动记录](tools-plugins/MARKDOWN_PDF_PLUGIN.md)
-
-## Scheduler
-
-- [定时网络搜索插件改动记录](scheduler/SCHEDULED_SEARCH_PLUGIN.md)
-- [受审批定时 Agent：数据库基础改动记录](scheduler/SCHEDULED_AGENT_STORAGE_FOUNDATION.md)
-- [受审批定时 Agent：规划与工具审计改动记录](scheduler/SCHEDULED_AGENT_PLANNING_AUDIT.md)
-- [受审批定时 Agent：自主执行完整改动记录](scheduler/SCHEDULED_AGENT_AUTONOMOUS_EXECUTION.md)
 
 ## Web
 
@@ -66,3 +66,19 @@
 - [Security Review RAG Persona Plan](roadmap-research/SECURITY_REVIEW_RAG_PERSONA_PLAN.md)
 - [taleclaw UI 改进与同类 Agent 调研报告](roadmap-research/AGENT_PRODUCT_RESEARCH_AND_UI_REFRESH.md)
 - [mytry 项目结构优化建议](roadmap-research/STRUCTURE_SUGGESTION.md)
+
+## Workplan
+
+- [Context Section Budget V1 完成记录](workplan/2026-06-11_CONTEXT_SECTION_BUDGET_V1_COMPLETION.md)
+- [Context 逻辑分层与消息装配完成记录](workplan/2026-06-11_CONTEXT_LOGICAL_SECTION_ASSEMBLY_COMPLETION.md)
+- [Context Section Report 第一阶段完成记录](workplan/2026-06-11_CONTEXT_SECTION_REPORT_COMPLETION.md)
+- [按模式拆分 Assistant / Coding Instructions 完成记录](workplan/2026-06-11_MODE_INSTRUCTIONS_COMPLETION.md)
+- [2026-06-10 工作总结](workplan/2026-06-10_DAILY_WORK_SUMMARY.md)
+- [Runtime 平台化收束改进计划](workplan/2026-06-09_RUNTIME_PLATFORM_REFOCUS_PLAN.md)
+- [任务完成文档留痕约定](workplan/2026-06-09_TASK_COMPLETION_DOCUMENTATION_RULE.md)
+- [Runtime 第一阶段完成记录：RunState + TraceStore](workplan/2026-06-09_RUNTIME_PHASE1_RUNSTATE_TRACESTORE_COMPLETION.md)
+- [Runtime 第二至第五阶段完成记录](workplan/2026-06-09_RUNTIME_PHASE2_TO_5_COMPLETION.md)
+- [Runtime 目录结构重组完成记录](workplan/2026-06-10_RUNTIME_DIRECTORY_RESTRUCTURE_COMPLETION.md)
+- [Legacy 兼容目录清理完成记录](workplan/2026-06-10_LEGACY_COMPAT_CLEANUP_COMPLETION.md)
+- [Scheduler Agent 移除完成记录](workplan/2026-06-10_SCHEDULER_AGENT_REMOVAL_COMPLETION.md)
+- [RuntimeKernel 移除完成记录](workplan/2026-06-10_RUNTIME_KERNEL_REMOVAL_COMPLETION.md)

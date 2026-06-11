@@ -1,0 +1,23 @@
+{
+  "run_id": "run_20260610-124348-bdfc48",
+  "session_id": "web:benchmark:coding-repeat-tool-010",
+  "status": "failed",
+  "reasoning_steps": 1,
+  "model_calls": 0,
+  "model_failures": 1,
+  "tool_calls": 0,
+  "tool_failures": 0,
+  "tool_denials": 0,
+  "total_model_duration_ms": 1496.984,
+  "total_tool_duration_ms": 0.0,
+  "input_tokens": 0,
+  "output_tokens": 0,
+  "total_tokens": 0,
+  "model_retry_count": 0,
+  "model_route_attempts": 2,
+  "sanitized_messages": 0,
+  "run_duration_ms": 1500.2,
+  "models": [],
+  "tools": [],
+  "generated_at": "2026-06-10T12:43:49.509994+00:00"
+}

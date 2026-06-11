@@ -37,6 +37,9 @@ class ToolExecutionResult:
     status: str
     output: str
     final_arguments: dict[str, Any]
+    duration_ms: float | None = None
+    error_type: str | None = None
+    error_message: str | None = None
     pre_hook_trace: list[HookTraceItem] = field(default_factory=list)
     post_hook_trace: list[HookTraceItem] = field(default_factory=list)
 
@@ -62,6 +65,7 @@ class ToolExecutor:
         self.hooks = hooks or []
 
     def execute(self, request: ToolExecutionRequest, invoker: Callable[[str, dict], str]) -> ToolExecutionResult:
+        started = time.perf_counter()
         arguments = dict(request.arguments)
         pre_traces = []
 
@@ -89,6 +93,9 @@ class ToolExecutor:
                     status="denied",
                     output=outcome.deny_reason,
                     final_arguments=arguments,
+                    duration_ms=_elapsed_ms(started),
+                    error_type="ToolDenied",
+                    error_message=outcome.deny_reason,
                     pre_hook_trace=pre_traces,
                 )
                 self._run_after_hooks(request, result)
@@ -106,6 +113,7 @@ class ToolExecutor:
                 status="success",
                 output=output,
                 final_arguments=arguments,
+                duration_ms=_elapsed_ms(started),
                 pre_hook_trace=pre_traces,
             )
         except Exception as e:
@@ -113,6 +121,9 @@ class ToolExecutor:
                 status="error",
                 output=f"Tool error: {e}",
                 final_arguments=arguments,
+                duration_ms=_elapsed_ms(started),
+                error_type=type(e).__name__,
+                error_message=str(e),
                 pre_hook_trace=pre_traces,
             )
         self._run_after_hooks(request, result)
@@ -145,3 +156,7 @@ class ToolExecutor:
                     decision="error",
                     reason=str(e),
                 ))
+
+
+def _elapsed_ms(started: float) -> float:
+    return round((time.perf_counter() - started) * 1000, 3)

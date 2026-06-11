@@ -1,0 +1,29 @@
+{
+  "run_id": "run_20260610-112800-76d991",
+  "session_id": "web:benchmark:coding-fix-math-001",
+  "channel": "benchmark",
+  "chat_id": "coding-fix-math-001",
+  "user_id": "benchmark",
+  "user_role": "admin",
+  "mode": "coding",
+  "execution_path": "task_session",
+  "status": "running",
+  "reasoning_steps": 8,
+  "tool_calls": 11,
+  "last_tool": "bash",
+  "stop_reason": null,
+  "started_at": "2026-06-10T11:28:00.837413+00:00",
+  "finished_at": null,
+  "final_answer": null,
+  "error": null,
+  "intent": "",
+  "profile": "",
+  "metadata": {
+    "benchmark_task_id": "coding-fix-math-001",
+    "task_session": {
+      "task_id": "coding-47e89cc5",
+      "task_session_id": "task:coding-47e89cc5",
+      "status": "running"
+    }
+  }
+}

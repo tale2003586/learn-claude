@@ -5,8 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from modes.router import ModeRouter
-from core.context import ContextBuilder
+from runtime.routing.router import ModeRouter
+from runtime.context import ContextBuilder
 from memory.lifecycle import MemoryLifecycle
 from memory.scoped_store import ScopedMemoryStore
 from plugins.markdown_pdf.plugin import MarkdownPdfPlugin

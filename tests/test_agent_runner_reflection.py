@@ -1,10 +1,10 @@
 import unittest
 from types import SimpleNamespace
 
-from core.agent_runner import AgentRunner
-from core.agent_spec import AgentSpec
-from core.provider import LLMResponse, ToolCall
-from core.reflection import ReflectionAgent, ReflectionDecision
+from runtime.agent_runner import AgentRunner
+from runtime.agent_spec import AgentSpec
+from models.provider import LLMResponse, ToolCall
+from runtime.reflection import ReflectionAgent, ReflectionDecision
 from modes.base import ModeProfile
 from sessions import Session
 from tools.executor import ToolExecutor

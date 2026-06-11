@@ -32,6 +32,7 @@ ROOT = Path(__file__).resolve().parents[1]
 STATIC_DIR = ROOT / "web" / "static"
 SESSIONS_DB = ROOT / ".sessions" / "sessions.db"
 USERS_DIR = ROOT / ".users"
+RUNS_DIR = ROOT / ".runs"
 MEMORY_FILES = [
     "SELF.md",
     "MEMORY.md",
@@ -119,6 +120,7 @@ class AgentService:
         content: str,
         user_id: str = DEFAULT_USER_ID,
         user_role: str = DEFAULT_USER_ROLE,
+        workspace_root: str | None = None,
         timeout: int = 180,
     ) -> str:
         return self.ask_stream(
@@ -126,6 +128,7 @@ class AgentService:
             content=content,
             user_id=user_id,
             user_role=user_role,
+            workspace_root=workspace_root,
             timeout=timeout,
         )
 
@@ -136,6 +139,7 @@ class AgentService:
         content: str,
         user_id: str = DEFAULT_USER_ID,
         user_role: str = DEFAULT_USER_ROLE,
+        workspace_root: str | None = None,
         on_text: Callable[[str], None] | None = None,
         timeout: int = 180,
     ) -> str:
@@ -149,6 +153,7 @@ class AgentService:
                 content=content,
                 user_id=user_id,
                 user_role=user_role,
+                workspace_root=workspace_root,
                 on_text=on_text,
             ),
             self._loop,
@@ -193,7 +198,7 @@ class AgentService:
         loop.close()
 
     async def _start_async(self) -> None:
-        from core.bootstrap import build_runtime
+        from runtime.bootstrap import build_runtime
 
         self._runtime = build_runtime()
         self._turn_lock = asyncio.Lock()
@@ -220,6 +225,7 @@ class AgentService:
         content: str,
         user_id: str,
         user_role: str,
+        workspace_root: str | None = None,
         on_text: Callable[[str], None] | None = None,
     ) -> str:
         if self._runtime is None or self._turn_lock is None or self._loop is None:
@@ -229,15 +235,18 @@ class AgentService:
             reply_future: asyncio.Future[str] = self._loop.create_future()
             scoped_chat_id = web_chat_id(user_id, session_id)
             self._pending[scoped_chat_id] = reply_future
+            metadata = {
+                "user_id": normalize_user_id(user_id),
+                "user_role": normalize_user_role(user_role),
+            }
+            if workspace_root:
+                metadata["workspace_root"] = str(workspace_root)
             try:
                 await self._runtime.submit_user_message(
                     content=content,
                     channel="web",
                     chat_id=scoped_chat_id,
-                    metadata={
-                        "user_id": normalize_user_id(user_id),
-                        "user_role": normalize_user_role(user_role),
-                    },
+                    metadata=metadata,
                 )
                 await self._runtime.run_once(on_text=on_text)
                 return await asyncio.wait_for(reply_future, timeout=10)
@@ -604,6 +613,98 @@ def _env_flag(name: str, *, default: bool) -> bool:
     return os.environ.get(name, fallback).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _read_run_index(limit: int = 100) -> list[dict[str, Any]]:
+    if not RUNS_DIR.exists():
+        return []
+    runs = []
+    for run_dir in RUNS_DIR.iterdir():
+        if not run_dir.is_dir():
+            continue
+        run_state = _read_json_file(run_dir / "run_state.json")
+        metrics = _read_json_file(run_dir / "metrics.json")
+        if not run_state:
+            continue
+        runs.append({
+            "run_id": run_dir.name,
+            "session_id": str(run_state.get("session_id") or ""),
+            "status": str(run_state.get("status") or ""),
+            "mode": str(run_state.get("mode") or ""),
+            "started_at": str(run_state.get("started_at") or ""),
+            "finished_at": str(run_state.get("finished_at") or ""),
+            "reasoning_steps": run_state.get("reasoning_steps", 0),
+            "model_calls": metrics.get("model_calls", 0),
+            "tool_calls": metrics.get("tool_calls", 0),
+        })
+    runs.sort(key=lambda item: item.get("started_at", ""), reverse=True)
+    return runs[:limit]
+
+
+def _read_run_detail(run_id: str) -> dict[str, Any]:
+    if not run_id or "/" in run_id or "\\" in run_id or run_id in {".", ".."}:
+        raise ValueError("Invalid run_id.")
+    run_dir = (RUNS_DIR / run_id).resolve()
+    if not run_dir.is_relative_to(RUNS_DIR.resolve()):
+        raise ValueError("Invalid run_id.")
+    if not run_dir.is_dir():
+        raise FileNotFoundError(run_id)
+    return {
+        "run_id": run_id,
+        "run_state": _read_json_file(run_dir / "run_state.json"),
+        "report": _read_json_file(run_dir / "report.json"),
+        "metrics": _read_json_file(run_dir / "metrics.json"),
+        "events": _read_trace_jsonl(run_dir / "trace.jsonl"),
+    }
+
+
+def _read_trace_jsonl(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    events = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return events
+
+
+def _read_json_file(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _trace_page(title: str, body: str) -> str:
+    escaped_title = html_escape(title)
+    return (
+        "<!doctype html>"
+        "<html><head>"
+        "<meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        f"<title>{escaped_title}</title>"
+        "<style>"
+        "body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:24px;color:#1f2937;background:#f8fafc;}"
+        "h1{font-size:24px;margin:0 0 16px;}h2{font-size:18px;margin:24px 0 8px;}"
+        ".cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:16px 0;}"
+        ".card{background:white;border:1px solid #d1d5db;padding:10px;}.label{color:#64748b;font-size:12px;}.value{font-size:18px;font-weight:650;margin-top:4px;}"
+        ".error{border-left:4px solid #dc2626;background:#fff7f7;padding:10px;margin:8px 0;}"
+        "table{border-collapse:collapse;width:100%;background:white;border:1px solid #d1d5db;}"
+        "th,td{border-bottom:1px solid #e5e7eb;padding:8px;text-align:left;vertical-align:top;font-size:13px;}"
+        "th{background:#eef2f7;font-weight:600;}a{color:#155e75;text-decoration:none;}a:hover{text-decoration:underline;}"
+        "pre{white-space:pre-wrap;word-break:break-word;margin:0;font-size:12px;line-height:1.4;}"
+        "</style>"
+        "</head><body>"
+        f"{body}"
+        "</body></html>"
+    )
+
+
 class RequestHandler(BaseHTTPRequestHandler):
     agent_service: AgentService
     auth_user: AuthenticatedUser
@@ -667,6 +768,23 @@ class RequestHandler(BaseHTTPRequestHandler):
                     },
                     status=HTTPStatus.SERVICE_UNAVAILABLE,
                 )
+            return
+
+        if parsed.path == "/runs":
+            self._handle_runs_page()
+            return
+
+        if parsed.path.startswith("/runs/"):
+            self._handle_run_detail_page(parsed.path.removeprefix("/runs/"))
+            return
+
+        if parsed.path == "/api/runs":
+            self._handle_runs_api()
+            return
+
+        if parsed.path == "/api/run":
+            params = parse_qs(parsed.query)
+            self._handle_run_api(params.get("run_id", [""])[0])
             return
 
         if parsed.path == "/api/sessions":
@@ -765,11 +883,125 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         self._send_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
 
+    def _handle_runs_page(self) -> None:
+        if not self._require_admin():
+            return
+        runs = _read_run_index()
+        rows = "\n".join(
+            "<tr>"
+            f"<td><a href=\"/runs/{html_escape(run['run_id'])}\">"
+            f"{html_escape(run['run_id'])}</a></td>"
+            f"<td>{html_escape(run.get('status', ''))}</td>"
+            f"<td>{html_escape(run.get('mode', ''))}</td>"
+            f"<td>{html_escape(run.get('session_id', ''))}</td>"
+            f"<td>{html_escape(run.get('started_at', ''))}</td>"
+            f"<td>{html_escape(str(run.get('model_calls', 0)))}</td>"
+            f"<td>{html_escape(str(run.get('tool_calls', 0)))}</td>"
+            "</tr>"
+            for run in runs
+        )
+        if not rows:
+            rows = '<tr><td colspan="7">No runs yet.</td></tr>'
+        self._send_html(_trace_page(
+            "Runs",
+            (
+                "<h1>Runs</h1>"
+                "<table>"
+                "<thead><tr><th>Run</th><th>Status</th><th>Mode</th>"
+                "<th>Session</th><th>Started</th><th>Models</th><th>Tools</th>"
+                "</tr></thead>"
+                f"<tbody>{rows}</tbody>"
+                "</table>"
+            ),
+        ))
+
+    def _handle_run_detail_page(self, raw_run_id: str) -> None:
+        if not self._require_admin():
+            return
+        run_id = unquote(raw_run_id).strip()
+        try:
+            detail = _read_run_detail(run_id)
+        except FileNotFoundError:
+            self._send_html(
+                _trace_page("Run not found", "<h1>Run not found</h1>"),
+                status=HTTPStatus.NOT_FOUND,
+            )
+            return
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        metrics = detail["metrics"]
+        state = detail["run_state"]
+        error_events = [
+            event for event in detail["events"]
+            if str(event.get("event") or "").endswith(".failed")
+            or str(event.get("event") or "") in {"run_failed", "model.route.attempts"}
+        ]
+        error_blocks = "\n".join(
+            "<div class=\"error\">"
+            f"<strong>{html_escape(event.get('event', ''))}</strong>"
+            f"<pre>{html_escape(json.dumps(event.get('payload') or {}, ensure_ascii=False, indent=2, default=str))}</pre>"
+            "</div>"
+            for event in error_events
+        )
+        event_rows = "\n".join(
+            "<tr>"
+            f"<td>{html_escape(event.get('timestamp', ''))}</td>"
+            f"<td>{html_escape(str(event.get('step') or ''))}</td>"
+            f"<td>{html_escape(event.get('event', ''))}</td>"
+            f"<td>{html_escape(str(event.get('span_id') or ''))}</td>"
+            "<td><pre>"
+            f"{html_escape(json.dumps(event.get('payload') or {}, ensure_ascii=False, indent=2, default=str))}"
+            "</pre></td>"
+            "</tr>"
+            for event in detail["events"]
+        )
+        body = (
+            '<p><a href="/runs">Back to runs</a></p>'
+            f"<h1>{html_escape(run_id)}</h1>"
+            "<div class=\"cards\">"
+            f"<div class=\"card\"><div class=\"label\">Status</div><div class=\"value\">{html_escape(str(state.get('status') or ''))}</div></div>"
+            f"<div class=\"card\"><div class=\"label\">Run duration</div><div class=\"value\">{html_escape(str(metrics.get('run_duration_ms') or ''))} ms</div></div>"
+            f"<div class=\"card\"><div class=\"label\">Model</div><div class=\"value\">{html_escape(str(metrics.get('model_calls', 0)))} ok / {html_escape(str(metrics.get('model_failures', 0)))} fail</div></div>"
+            f"<div class=\"card\"><div class=\"label\">Tools</div><div class=\"value\">{html_escape(str(metrics.get('tool_calls', 0)))}</div></div>"
+            f"<div class=\"card\"><div class=\"label\">Tokens</div><div class=\"value\">{html_escape(str(metrics.get('total_tokens', 0)))}</div></div>"
+            f"<div class=\"card\"><div class=\"label\">Sanitized</div><div class=\"value\">{html_escape(str(metrics.get('sanitized_messages', 0)))}</div></div>"
+            "</div>"
+            f"{'<h2>Errors</h2>' + error_blocks if error_blocks else ''}"
+            "<h2>Metrics</h2>"
+            f"<pre>{html_escape(json.dumps(metrics, ensure_ascii=False, indent=2, default=str))}</pre>"
+            "<h2>Run State</h2>"
+            f"<pre>{html_escape(json.dumps(state, ensure_ascii=False, indent=2, default=str))}</pre>"
+            "<h2>Trace</h2>"
+            "<table>"
+            "<thead><tr><th>Time</th><th>Step</th><th>Event</th><th>Span</th><th>Payload</th></tr></thead>"
+            f"<tbody>{event_rows}</tbody>"
+            "</table>"
+        )
+        self._send_html(_trace_page(run_id, body))
+
+    def _handle_runs_api(self) -> None:
+        if not self._require_admin():
+            return
+        self._send_json({"runs": _read_run_index()})
+
+    def _handle_run_api(self, run_id: str) -> None:
+        if not self._require_admin():
+            return
+        try:
+            self._send_json(_read_run_detail(run_id))
+        except FileNotFoundError:
+            self._send_json({"error": "Run not found"}, status=HTTPStatus.NOT_FOUND)
+        except ValueError as exc:
+            self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+
     def _handle_chat(self) -> None:
         try:
             payload = self._read_json_body()
             message = str(payload.get("message", "")).strip()
             session_id = str(payload.get("session_id", "default")).strip() or "default"
+            workspace_root = str(payload.get("workspace_root", "")).strip() or None
             user = self._current_user()
             if not message:
                 self._send_json({"error": "message is required"}, status=HTTPStatus.BAD_REQUEST)
@@ -780,6 +1012,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 content=message,
                 user_id=user.user_id,
                 user_role=user.role,
+                workspace_root=workspace_root,
             )
             self._send_json({
                 "reply": reply,
@@ -888,6 +1121,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             payload = self._read_json_body()
             message = str(payload.get("message", "")).strip()
             session_id = str(payload.get("session_id", "default")).strip() or "default"
+            workspace_root = str(payload.get("workspace_root", "")).strip() or None
             user = self._current_user()
             if not message:
                 self._send_json({"error": "message is required"}, status=HTTPStatus.BAD_REQUEST)
@@ -908,6 +1142,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     content=message,
                     user_id=user.user_id,
                     user_role=user.role,
+                    workspace_root=workspace_root,
                     on_text=lambda text: events.put({"type": "delta", "text": text}),
                 )
                 events.put({
@@ -1177,6 +1412,20 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_html(
+        self,
+        body: str,
+        *,
+        status: HTTPStatus = HTTPStatus.OK,
+    ) -> None:
+        encoded = body.encode("utf-8")
+        self.send_response(status)
+        self._send_cors_headers()
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
     def _send_stream_headers(self) -> None:
         self.send_response(HTTPStatus.OK)
         self._send_cors_headers()
@@ -1276,6 +1525,12 @@ class RequestHandler(BaseHTTPRequestHandler):
                 role=DEFAULT_USER_ROLE,
             ),
         )
+
+    def _require_admin(self) -> bool:
+        if self._current_user().role == "admin":
+            return True
+        self._send_json({"error": "Admin role required"}, status=HTTPStatus.FORBIDDEN)
+        return False
 
     def _request_cookie_token(self) -> str:
         cookie = SimpleCookie()

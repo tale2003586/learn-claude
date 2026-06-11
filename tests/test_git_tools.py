@@ -1,0 +1,102 @@
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+from sessions.session import Session
+from tools import handlers
+from tools.tool_registry import build_lead_tool_registry
+
+
+def _init_repo(root: Path) -> None:
+    subprocess.run(["git", "init"], cwd=root, check=True, capture_output=True, text=True)
+
+
+def _session_for(root: Path) -> Session:
+    return Session(
+        id="task:git",
+        current_mode="coding",
+        metadata={
+            "kind": "task_session",
+            "workspace_root": str(root),
+            "user_role": "admin",
+        },
+    )
+
+
+class GitToolTests(unittest.TestCase):
+    def test_git_status_diff_add_commit_and_log_use_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "project"
+            workspace.mkdir()
+            _init_repo(workspace)
+            session = _session_for(workspace)
+
+            (workspace / "README.md").write_text("hello\n", encoding="utf-8")
+
+            status = handlers.run_git_status(_session=session)
+            self.assertIn("README.md", status)
+
+            add = handlers.run_git_add(["README.md"], _session=session)
+            self.assertEqual("(no output)", add)
+
+            staged_diff = handlers.run_git_diff(staged=True, _session=session)
+            self.assertIn("+hello", staged_diff)
+
+            commit = handlers.run_git_commit("initial commit", _session=session)
+            self.assertIn("initial commit", commit)
+
+            log = handlers.run_git_log(max_count=1, _session=session)
+            self.assertIn("initial commit", log)
+
+    def test_git_pathspecs_cannot_escape_workspace_or_use_magic(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "project"
+            workspace.mkdir()
+            _init_repo(workspace)
+            session = _session_for(workspace)
+
+            outside = handlers.run_git_add(["../outside.txt"], _session=session)
+            self.assertIn("Path escapes workspace", outside)
+
+            magic = handlers.run_git_add([":(top)README.md"], _session=session)
+            self.assertIn("Git pathspec magic is not allowed", magic)
+
+    def test_git_tools_visibility_and_deferred_write_tools(self) -> None:
+        registry = build_lead_tool_registry()
+        session = _session_for(Path("/tmp/project"))
+
+        visible = registry.visible_names_for_turn(session, "coding")
+        self.assertIn("list_files", visible)
+        self.assertIn("git_status", visible)
+        self.assertIn("git_diff", visible)
+        self.assertIn("git_log", visible)
+        self.assertIn("git_branch", visible)
+        self.assertNotIn("git_add", visible)
+        self.assertNotIn("git_commit", visible)
+
+        unlocked = registry.execute(
+            "tool_search",
+            {"query": "select:git_add"},
+            session=session,
+            mode="coding",
+        )
+        self.assertIn("Unlocked tool", unlocked)
+        self.assertIn("git_add", registry.visible_names_for_turn(session, "coding"))
+
+    def test_list_files_uses_workspace_and_rejects_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "project"
+            (workspace / "src").mkdir(parents=True)
+            (workspace / "src" / "version.py").write_text('VERSION = "0.1.0"\n', encoding="utf-8")
+            session = _session_for(workspace)
+
+            listing = handlers.run_list_files(recursive=True, _session=session)
+            self.assertIn("src/version.py", listing)
+
+            escaped = handlers.run_list_files("../outside", _session=session)
+            self.assertIn("Path escapes workspace", escaped)
+
+
+if __name__ == "__main__":
+    unittest.main()

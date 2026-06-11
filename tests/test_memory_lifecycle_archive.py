@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core.provider import LLMResponse
+from models.provider import LLMResponse
 from memory.archive_store import ArchivedRecentTurn, MemoryArchiveStore
 from memory.history_summary import HistorySummarizer
 from memory.lifecycle import MemoryLifecycle

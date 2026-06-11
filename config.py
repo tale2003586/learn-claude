@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-from core.model_pool import build_model_pool_from_env
+from models.model_pool import build_model_pool_from_env
 from skill_runtime import SKILL_LOADER
 
 load_dotenv(override=True)
@@ -24,6 +24,23 @@ os.environ.pop("all_proxy", None)
 
 
 MODEL_POOL = build_model_pool_from_env()
+MODEL_HEALTHCHECK_ON_STARTUP = os.getenv(
+    "LLM_HEALTHCHECK_ON_STARTUP",
+    "0",
+).lower() in {"1", "true", "yes"}
+MODEL_HEALTHCHECK_PURPOSES = [
+    item.strip()
+    for item in os.getenv(
+        "LLM_HEALTHCHECK_PURPOSES",
+        "chat,coding,summary,hybrid",
+    ).split(",")
+    if item.strip()
+]
+MODEL_HEALTHCHECK_RESULTS = (
+    MODEL_POOL.health_check_purposes(MODEL_HEALTHCHECK_PURPOSES)
+    if MODEL_HEALTHCHECK_ON_STARTUP
+    else []
+)
 MODEL = MODEL_POOL.model_for("chat")
 MAX_TOKENS_PARAM = MODEL_POOL.profile_for("chat").max_tokens_param
 client = MODEL_POOL.client_for_purpose("chat")
@@ -31,6 +48,14 @@ REFLECTION_ENABLED = os.getenv("REFLECTION_ENABLED", "0").lower() in {"1", "true
 REFLECTION_MAX_TOKENS = int(os.getenv("REFLECTION_MAX_TOKENS", "500"))
 REFLECTION_MIN_REASONING_STEPS = int(os.getenv("REFLECTION_MIN_REASONING_STEPS", "6"))
 WORKDIR = Path.cwd() 
+WORKSPACE_ROOTS = [
+    Path(item).expanduser().resolve()
+    for item in os.getenv("WORKSPACE_ROOTS", str(WORKDIR)).split(os.pathsep)
+    if item.strip()
+]
+DEFAULT_CODING_WORKSPACE = Path(
+    os.getenv("DEFAULT_CODING_WORKSPACE", str(WORKDIR))
+).expanduser().resolve()
 
 SKILLS_DIR = WORKDIR / "skills"
 

@@ -1,5 +1,5 @@
-from core.agent_spec import AgentSpec
-from core.model_task_runner import ModelTaskRunner
+from runtime.agent_spec import AgentSpec
+from models.model_task_runner import ModelTaskRunner
 
 
 class HistorySummarizer:
