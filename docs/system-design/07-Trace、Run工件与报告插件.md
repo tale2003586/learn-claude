@@ -44,10 +44,14 @@ agent 失败时，最终回复通常不够用。
 - `trace.jsonl`
 - `report.json`
 - `metrics.json`
+- `trace_summary.json`
+- `trace_summary.md`
 - `report.md`
 - coding task 下可能还有 `workspace_diff.json`
 
-其中 `report.md` 不是 trace core 直接写的，而是由 `plugins/run_report` 在 `after_run` 阶段生成。
+其中 `trace_summary.json` / `trace_summary.md` 由 trace core 根据 `trace.jsonl`、`run_state.json` 和 `report.json` 生成，用来快速查看执行路径、失败原因、工具链、文件影响和验证结果。
+
+`report.md` 不是 trace core 直接写的，而是由 `plugins/run_report` 在 `after_run` 阶段生成。
 
 ## trace event 结构
 
@@ -94,6 +98,7 @@ context 级：
 - `context.build.started`
 - `context.build.completed`
 - `context.sanitized`
+- `context_emergency_trim`
 
 model 级：
 
@@ -115,6 +120,17 @@ workspace 级：
 - `workspace.resolved`
 - `workspace.snapshot.captured`
 - `workspace.diff.written`
+
+memory / RAG 级：
+
+- `memory.lifecycle.started`
+- `memory.lifecycle.completed`
+- `memory.vector.turn_indexed`
+- `memory.vector.files_indexed`
+- `memory.candidate.processed`
+- `memory.candidate.promoted`
+- `security_rag.auto_context`
+- `security_rag.search`
 
 ## metrics.json 怎么来
 
@@ -139,6 +155,58 @@ metrics 是从 `trace.jsonl` 聚合出来的。
 - tools
 
 这使得 trace 不只是调试日志，也能形成 run 级指标。
+
+## trace_summary
+
+`runtime/trace/summary.py` 会把原始 trace 聚合成更容易阅读的执行摘要。
+
+当前摘要包含：
+
+- run 基本信息。
+- workspace 信息。
+- failure 分类和失败线索。
+- 模型调用统计。
+- 工具调用路径。
+- 文件读写影响。
+- verification / test 相关命令。
+- multi-agent / subagent 活动。
+- memory 生命周期事件。
+- 一条简化的 execution path。
+
+`trace_summary.md` 适合人看，例如：
+
+```text
+计划 -> 调用 read_file -> 调用 apply_patch -> 调用 pytest -> 完成
+```
+
+`trace_summary.json` 适合 UI 或评测脚本读。
+
+## TraceIndexStore
+
+文件工件仍然是 trace 的证据源，但系统也可以把 run 和 step 索引到关系型数据库。
+
+核心实现位于：
+
+- `runtime/trace/index_store.py`
+- `runtime/db.py`
+
+开启方式由环境变量控制：
+
+```text
+TRACE_INDEX_ENABLED=1
+TRACE_DATABASE_URL=...
+```
+
+如果没有单独配置 `TRACE_DATABASE_URL`，会尝试复用 `DATABASE_URL`。当前系统设计文档按 PostgreSQL 主路径描述。
+
+索引层主要用于：
+
+- run 列表查询。
+- 按状态、session、时间筛选。
+- 展示每一步 execution path。
+- 给 Web UI 提供比扫 JSONL 更快的入口。
+
+它不是原始 trace 的唯一存储。即使索引失败，`.runs/<run_id>/trace.jsonl` 仍然应该保留。
 
 ## report.json 和 report.md 的分工
 
@@ -219,10 +287,10 @@ Web 侧可以读取这些文件，把它们展示成：
 
 - OpenTelemetry 原生导出。
 - 跨进程 trace collector。
-- 大规模 trace 存储后端。
+- 大规模原始 trace 存储后端。
 - span duration 的统一闭合模型。
 
-但字段上已经有 run/session/request/span/parent_span/step/tool_call_id，后续导出 OTEL 不需要重做整条链路。
+但字段上已经有 run/session/request/span/parent_span/step/tool_call_id，后续导出 OTEL 不需要重做整条链路。关系型索引已经能支撑本地 UI 查询，但它目前仍是索引层，不是完整 trace warehouse。
 
 ## 总结
 

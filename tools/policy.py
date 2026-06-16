@@ -36,6 +36,8 @@ PRELOADED_TOOLS_BY_MODE = {
         "task_update",
         "task_list",
         "task_get",
+        "task",
+        "parallel_tasks",
         "claim_task",
         "check_background",
         "read_inbox",
@@ -76,7 +78,6 @@ DEFERRED_TOOLS = {
     "shutdown_request",
     "shutdown_status",
     "plan_approval",
-    "task",
     "claim_task",
 }
 

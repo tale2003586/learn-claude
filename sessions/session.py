@@ -1,7 +1,6 @@
-# session.py
-
+from collections import OrderedDict
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -45,12 +44,20 @@ class Session:
 
 
 class SessionManager:
-    def __init__(self, db_path: str | Path | None = None) -> None:
-        self._sessions: dict[str, Session] = {}
-        self._store = SessionStore(db_path or Path.cwd() / ".sessions" / "sessions.db")
+    def __init__(
+        self,
+        db_path: str | Path | None = None,
+        *,
+        max_sessions: int = 128,
+    ) -> None:
+        self.max_sessions = max(1, int(max_sessions))
+        self._sessions: OrderedDict[str, Session] = OrderedDict()
+        self._store = SessionStore(db_path)
 
     def get_or_create(self, session_id: str) -> Session:
-        if session_id not in self._sessions:
+        if session_id in self._sessions:
+            self._sessions.move_to_end(session_id)
+        else:
             loaded = self._store.load_session(session_id)
             if loaded is None:
                 self._sessions[session_id] = Session(id=session_id)
@@ -64,11 +71,14 @@ class SessionManager:
                     last_compacted=loaded["last_compacted"],
                     metadata=loaded["metadata"],
                 )
+            self._evict_if_needed()
         return self._sessions[session_id]
 
     def save(self, session: Session) -> None:
         session.touch()
         self._sessions[session.id] = session
+        self._sessions.move_to_end(session.id)
+        self._evict_if_needed()
         self._store.save_session(session)
 
     def list_sessions(self) -> list[dict[str, Any]]:
@@ -78,5 +88,35 @@ class SessionManager:
         self._sessions.pop(session_id, None)
         return self._store.delete_session(session_id)
 
+    def cleanup_expired_sessions(
+        self,
+        *,
+        max_age_days: int,
+        now: datetime | None = None,
+    ) -> int:
+        cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=max(0, int(max_age_days)))
+        removed = 0
+        for row in self.list_sessions():
+            updated_at = _parse_iso_datetime(row.get("updated_at"))
+            if updated_at is None or updated_at >= cutoff:
+                continue
+            if self.delete(str(row.get("id", ""))):
+                removed += 1
+        return removed
+
     def close(self) -> None:
         self._store.close()
+
+    def _evict_if_needed(self) -> None:
+        while len(self._sessions) > self.max_sessions:
+            self._sessions.popitem(last=False)
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed

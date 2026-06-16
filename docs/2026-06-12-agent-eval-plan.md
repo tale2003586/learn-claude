@@ -1,124 +1,153 @@
-# 2026-06-12 Agent Evaluation And Framework Plan
+# 2026-06-12 Agent 测试与框架收束计划
 
-## Objective
+## 目标
 
-Tomorrow's work should validate the current coding benchmark system as an agent architecture, not only as a patch generator. The run should answer three questions:
+明天的核心目标不是单纯证明 agent 能生成 patch，而是验证当前系统作为一个 agent 架构是否站得住。测试需要回答三个问题：
 
-1. Can the system reliably solve at least 12 coding tasks, including several complex tasks?
-2. Can the main-agent/sub-agent protocol make complex work more inspectable and more reliable than a single-agent baseline?
-3. Can the framework produce readable traces, explicit workspace boundaries, and actionable failure reports?
+1. 系统能不能稳定完成至少 12 个 coding / SWE-bench 风格任务，其中包含 3 个左右复杂任务。
+2. 主 agent / 子 agent 的任务分发协议，是否真的让复杂任务更清晰、更可靠、更容易复盘。
+3. trace、workspace、失败分类、最终报告这些基础设施，是否足够支撑后续持续迭代。
 
-The expected output is a tightened benchmark loop: task definitions, run artifacts, readable trace summaries, and a clear list of framework changes that should be kept.
+最终希望得到的是一套更收束的 benchmark 闭环：任务定义清楚，运行产物完整，trace 可读，失败能分类，workspace 边界明确，多 agent 的收益可以被指标证明。
 
-## Scope
+## 明天要覆盖的范围
 
-The work covers four areas:
+明天重点做四件事：
 
-- Task execution: run at least 12 benchmark tasks.
-- Multi-agent protocol: define how the main agent assigns work and how sub-agents report back.
-- Trace and reporting: make run traces easier to audit without reading raw JSONL line by line.
-- Workspace discipline: make the active task workspace unambiguous to the model, tools, trace, and final reports.
+- 跑至少 12 个任务，覆盖简单、中等、复杂、SWE-bench 真实任务。
+- 修补主 agent / 子 agent 之间的协议通信，让任务分发和结果回传有结构。
+- 改进 trace 可读性，让失败分析不再依赖手动读很长的 `trace.jsonl`。
+- 明确 workspace，让模型、工具、trace、报告都知道当前任务到底应该在哪个目录里执行。
 
-This plan intentionally avoids hour-by-hour scheduling. Treat each section as a completion checklist.
+这份计划不是按时间排的日程表，而是按“明天要完成什么、怎么判断完成”来写。
 
-## Task Mix
+## 任务组合
 
-Run at least 12 tasks.
+明天至少跑 12 个任务。
 
-Suggested distribution:
+建议组合：
 
-- 5 simple bugfix tasks.
-- 3 medium tasks involving multiple files or stricter diff constraints.
-- 1 real SWE-bench Lite task.
-- 3 complex multi-agent tasks designed to show main-agent/sub-agent orchestration.
+- 5 个简单任务：验证基础 coding 稳定性。
+- 3 个中等任务：验证跨文件定位、diff 控制、工具使用。
+- 1 个 SWE-bench Lite 真实任务：验证真实 benchmark 闭环。
+- 3 个复杂多 agent 任务：专门体现主 agent 发布任务、子 agent 领取任务、主 agent 汇总决策的流程。
 
-The complex tasks should not merely be larger. They should require useful division of labor.
+复杂任务不要只是“代码更多”，而是要真的需要分工。如果单 agent 很容易一路做完，就体现不出多 agent 架构。
 
-### Simple Tasks
+## 简单任务
 
-Use these to check basic agent stability:
+简单任务用于检查基础稳定性。
 
-- Boundary-condition bugfix.
-- Parser edge-case bugfix.
-- Add a small utility function with tests.
-- Invalid edit recovery.
-- Workspace-scope safety.
+可选任务风格：
 
-Required success criteria:
+- 边界条件 bugfix，例如 clamp、range、空输入。
+- parser edge case，例如嵌套括号、空 token、非法 token。
+- 新增小工具函数，并补充或通过已有测试。
+- invalid edit recovery，故意让第一次编辑失败，观察恢复能力。
+- workspace scope safety，检查 agent 是否会跑到 benchmark 仓库根目录而不是任务 workspace。
 
-- Tests pass.
-- Only expected files are changed.
-- No shell command escapes the task workspace.
-- The final answer mentions the changed files and verification result.
+验收标准：
 
-### Medium Tasks
+- 测试通过。
+- 只修改预期文件。
+- shell 命令没有逃逸出任务 workspace。
+- final answer 说明修改了什么、怎么验证的。
 
-Use these to check more realistic coding behavior:
+## 中等任务
 
-- Cross-file behavior fix with one implementation file and one test file.
-- Git diff discipline task where only implementation changes are allowed.
-- Context/memory task where the agent must use previously discovered facts without re-reading everything.
+中等任务用于检查更接近真实开发的行为。
 
-Required success criteria:
+可选任务风格：
 
-- The agent identifies the target file before editing.
-- The agent verifies the final diff.
-- The trace shows a bounded inspect -> edit -> verify loop.
-- Repeated failed commands or repeated identical tool calls are avoided or recovered from.
+- 跨文件行为修复：测试文件提示行为，实现文件在另一个模块。
+- git diff discipline：要求只允许实现修复，不允许改测试或元数据。
+- context / memory 使用：需要记住前面发现的文件或约束，不要反复全仓库搜索。
 
-### Complex Multi-Agent Tasks
+验收标准：
 
-Use these to demonstrate the architecture.
+- agent 在编辑前能定位目标文件。
+- 最终检查 diff。
+- trace 中能看出有限的 inspect -> edit -> verify 流程。
+- 避免重复执行完全相同的失败命令；如果触发失败，能换策略恢复。
 
-Task A: multi-agent diagnosis and patch
+## 复杂多 Agent 任务
 
-- Main agent receives a failing project with several plausible bug locations.
-- Sub-agent 1 inspects failing tests and failure messages.
-- Sub-agent 2 maps relevant implementation files.
-- Sub-agent 3 proposes a minimal fix and risks.
-- Main agent decides the final patch and applies it.
+复杂任务用于展示你的架构优势。
 
-Task B: multi-agent code review and repair
+### 复杂任务 A：多 agent 定位与修复
 
-- Start from an intentionally flawed patch or a hidden regression.
-- Sub-agent 1 checks correctness.
-- Sub-agent 2 checks test coverage and regression risk.
-- Sub-agent 3 checks diff scope and workspace hygiene.
-- Main agent resolves conflicting findings and produces the final patch.
+任务设置：
 
-Task C: SWE-bench style issue
+- 主 agent 收到一个有多个潜在 bug 位置的项目。
+- 子 agent 1 负责读失败测试和错误日志。
+- 子 agent 2 负责定位相关实现文件。
+- 子 agent 3 负责提出最小修复方案和风险。
+- 主 agent 汇总三方证据，决定最终 patch，并执行修改。
 
-- Main agent reads the problem statement and assigns sub-tasks for code search, root-cause analysis, and patch validation.
-- Sub-agents return evidence with file paths and reasoning.
-- Main agent generates the final patch/prediction.
-- Official harness result should be recorded as resolved, unresolved, or infra error.
+重点观察：
 
-Required success criteria:
+- 子 agent 是否分工明确。
+- 主 agent 是否使用子 agent 的证据，而不是重新自己乱搜。
+- 最终 patch 是否仍然小而准。
 
-- The trace shows task delegation, sub-agent outputs, and main-agent synthesis.
-- Sub-agents produce non-overlapping evidence.
-- Main agent uses sub-agent findings rather than ignoring them.
-- Final patch remains minimal.
-- Failure reports distinguish patch failure from infrastructure failure.
+### 复杂任务 B：多 agent 代码审查与修复
 
-## Main-Agent/Sub-Agent Protocol
+任务设置：
 
-Add or formalize a small protocol for task handoff and result collection.
+- 给一个已有但有缺陷的 patch，或者给一个容易引入隐藏回归的任务。
+- 子 agent 1 负责 correctness review。
+- 子 agent 2 负责测试影响和回归风险。
+- 子 agent 3 负责 diff 范围和 workspace hygiene。
+- 主 agent 处理冲突意见，产出最终修复。
 
-### Assignment Schema
+重点观察：
 
-Each sub-agent assignment should include:
+- 子 agent 是否能发现不同类型的问题。
+- 主 agent 是否显式记录采纳/拒绝了哪些建议。
+- 最终修改是否避免过度修复。
+
+### 复杂任务 C：SWE-bench 风格真实任务
+
+任务设置：
+
+- 主 agent 读取 problem statement。
+- 拆分出代码搜索、根因分析、修复设计、验证策略几个子任务。
+- 子 agent 返回带文件路径和证据的发现。
+- 主 agent 生成最终 patch / prediction。
+- 官方 harness 结果记录为 resolved / unresolved / infra error。
+
+重点观察：
+
+- trace 是否能看出完整分工。
+- 失败时能不能区分 patch 错误和 Docker / 依赖 / 网络等 infra 错误。
+- 是否能生成官方 `predictions.jsonl` 并完成后续评测。
+
+复杂任务统一验收标准：
+
+- trace 中能看到任务分发、子 agent 输出、主 agent 汇总。
+- 子 agent 尽量产生不重叠的证据。
+- 主 agent 明确说明最终决策依据。
+- 最终 patch 保持最小化。
+- 失败报告能区分 patch failure、infra failure、tool/runtime failure、protocol failure。
+
+## 主 Agent / 子 Agent 协议
+
+明天需要把主子 agent 之间的通信协议先定一个最小可用版本。目标不是复杂，而是让任务可控、结果可聚合、trace 可读。
+
+## 子任务分发结构
+
+每个子 agent assignment 至少包含：
 
 ```json
 {
   "assignment_id": "short-stable-id",
   "role": "diagnosis | search | review | verification | risk",
-  "objective": "one concrete task",
-  "workspace_root": "absolute or canonical workspace path",
-  "allowed_paths": ["path/prefix"],
-  "forbidden_paths": ["path/prefix"],
+  "objective": "一个明确的子任务",
+  "workspace_root": "当前任务 workspace 的规范路径",
+  "allowed_paths": ["允许读取或关注的路径前缀"],
+  "forbidden_paths": ["禁止修改或读取的路径前缀"],
   "inputs": {
-    "task_request": "short summary",
+    "task_request": "任务摘要",
     "known_files": [],
     "known_failures": []
   },
@@ -128,81 +157,82 @@ Each sub-agent assignment should include:
     "recommendation": "optional",
     "confidence": "required"
   },
-  "stop_condition": "what counts as enough"
+  "stop_condition": "做到什么程度就停止"
 }
 ```
 
-### Result Schema
+## 子任务结果结构
 
-Each sub-agent should return:
+每个子 agent 回传结果至少包含：
 
 ```json
 {
   "assignment_id": "same id",
   "status": "completed | blocked | inconclusive",
-  "summary": "short conclusion",
+  "summary": "一句话结论",
   "evidence": [
     {
       "file": "relative/path.py",
       "line": 12,
-      "claim": "what this evidence supports"
+      "claim": "这条证据支持什么判断"
     }
   ],
-  "recommendation": "specific next action",
-  "risks": ["known risk or uncertainty"],
+  "recommendation": "建议主 agent 下一步怎么做",
+  "risks": ["风险或不确定点"],
   "confidence": "low | medium | high"
 }
 ```
 
-### Main-Agent Responsibilities
+## 主 Agent 职责
 
-The main agent should:
+主 agent 需要做到：
 
-- Create bounded assignments.
-- Avoid sending every sub-agent to inspect the whole repo.
-- Merge findings into a decision table.
-- Resolve conflicts explicitly.
-- Apply the final patch itself or through a single controlled editing step.
-- Record why it accepted or rejected each sub-agent recommendation.
+- 发布边界清楚的子任务。
+- 不要让所有子 agent 都去扫全仓库。
+- 把子 agent 发现合并成 decision table。
+- 显式处理冲突意见。
+- 最终 patch 由主 agent 汇总后统一执行，避免多个子 agent 乱改。
+- 记录为什么采纳或拒绝每个子 agent 的建议。
 
-### Protocol Metrics
+## 协议指标
 
-Measure:
+每个复杂任务记录：
 
-- Number of sub-agent assignments per complex task.
-- Percentage of sub-agent outputs used in the final decision.
-- Duplicate-work rate: two sub-agents reporting the same file and same finding.
-- Conflict-resolution quality: whether the main agent explains conflicting recommendations.
-- Patch minimality: number of files touched compared with expected files.
+- 子任务数量。
+- 子任务完成数量。
+- 子 agent 输出中有多少被主 agent 使用。
+- 重复劳动比例：多个子 agent 是否报告了同一个文件、同一个结论。
+- 冲突处理质量：主 agent 是否解释了冲突意见。
+- patch 最小化程度：实际修改文件数和预期修改文件数是否一致。
 
-## Trace Readability Improvements
+## Trace 可读性改进
 
-Raw `trace.jsonl` is too detailed for routine analysis. Add a compact trace summary artifact for every run.
+现在 raw `trace.jsonl` 信息太密，适合机器记录，不适合日常复盘。明天需要做一个紧凑摘要产物。
 
-Recommended new artifact:
+建议每个 run 生成：
 
 ```text
 trace_summary.md
 ```
 
-Recommended sections:
+建议包含：
 
-- Run metadata: task id, run id, model, workspace root, status.
-- Outcome: pass, fail, infra error, loop guard, empty response, timeout.
-- Workspace: requested workspace, resolved workspace, allowed root.
-- Tool timeline: only meaningful tool calls, grouped by reasoning step.
-- File access summary: read files, edited files, denied paths.
-- Agent delegation summary: assignments, sub-agent results, main-agent decisions.
-- Verification summary: tests run, command status, final diff status.
-- Failure diagnosis: primary failure reason and supporting evidence.
+- Run metadata：task id、run id、model、workspace root、最终状态。
+- Outcome：pass、fail、infra error、loop guard、empty response、timeout。
+- Workspace：requested workspace、resolved workspace、allowed root。
+- Tool timeline：只保留关键工具调用，按 reasoning step 分组。
+- File access summary：读了哪些文件、改了哪些文件、哪些路径被拒绝。
+- Agent delegation summary：主 agent 分发了什么任务，子 agent 返回了什么，主 agent 如何决策。
+- Verification summary：跑了哪些测试，命令状态，最终 diff 状态。
+- Failure diagnosis：主失败原因和证据。
 
-Recommended machine-readable artifact:
+同时建议生成机器可读版本：
 
 ```text
 trace_summary.json
 ```
 
-Minimum fields:
+最小字段：
 
 ```json
 {
@@ -233,137 +263,138 @@ Minimum fields:
 }
 ```
 
-Trace summary acceptance criteria:
+trace 摘要验收标准：
 
-- A failed run can be diagnosed in under 3 minutes from `trace_summary.md`.
-- The summary identifies whether failure came from the model, tool/runtime, verifier, Docker/SWE-bench infrastructure, or task design.
-- The summary links to raw trace and final diff for deeper inspection.
+- 一个失败 run 可以在 3 分钟内从 `trace_summary.md` 判断主要原因。
+- 摘要能区分模型错误、工具/runtime 错误、verifier 错误、Docker/SWE-bench infra 错误、任务设计错误。
+- 摘要能链接或指向 raw trace、最终 diff、关键日志。
 
-## Workspace Clarity
+## Workspace 明确化
 
-The workspace must be visible and enforced at every layer.
+workspace 必须在每一层都清楚：模型上下文、工具执行、trace、报告。
 
-### Model Context
+## 模型上下文
 
-The task prompt or runtime context should explicitly include:
+任务 prompt 或 runtime context 应明确写入：
 
-- Current workspace root.
-- Allowed root.
-- Whether paths should be relative to workspace.
-- The exact command style expected for tests.
+- 当前 workspace root。
+- allowed root。
+- 路径是否应相对 workspace。
+- 推荐的测试命令形式。
 
-Example wording:
+建议文案：
 
 ```text
 Workspace root: /tmp/.../task_workspace
-All file paths and shell commands must operate inside this workspace.
-Use relative paths unless an absolute path is explicitly provided by the workspace resolver.
-Do not cd to the benchmark repository root.
+所有文件路径和 shell 命令都必须在该 workspace 内执行。
+除非 workspace resolver 明确提供绝对路径，否则使用相对路径。
+不要 cd 到 benchmark 仓库根目录。
 ```
 
-### Tool Enforcement
+## 工具约束
 
-Keep enforcing:
+继续保留并完善：
 
-- `list_files`, `read_file`, and `edit_file` cannot escape workspace.
-- Shell commands that `cd` to an absolute path outside workspace are denied.
-- Denied calls must be recorded in trace summaries.
+- `list_files`、`read_file`、`edit_file` 不能逃逸 workspace。
+- shell 命令如果 `cd` 到 workspace 外的绝对路径，直接拒绝。
+- 被拒绝的调用必须进入 trace summary。
 
-### Reporting
+## 报告字段
 
-Every report should include:
+每个 run report 应包含：
 
-- `workspace_requested`
-- `workspace_resolved`
-- `workspace_allowed_root`
-- `workspace_escape_attempts`
-- `commands_with_external_cd`
+```text
+workspace_requested
+workspace_resolved
+workspace_allowed_root
+workspace_escape_attempts
+commands_with_external_cd
+```
 
-Workspace success criteria:
+workspace 验收标准：
 
-- Zero successful shell commands run outside the task workspace.
-- Any attempted external `cd` is denied and classified as workspace violation.
-- The model recovers from a workspace denial by using `.` or the resolved workspace path.
+- 没有任何成功执行的 shell 命令跑到任务 workspace 外。
+- 外部 `cd` 尝试会被拒绝，并分类为 workspace violation。
+- 模型遇到 workspace denial 后能改用 `.` 或 resolved workspace path 恢复。
 
-## Ablation Experiments
+## 消融实验设计
 
-Add a small ablation design so the evaluation shows why the architecture matters.
+明天的测试中要加入一些消融设计，用来说明你的架构为什么有价值。
 
-### Ablation A: Single Agent vs Multi-Agent
+## 消融 A：单 agent vs 多 agent
 
-Run the same complex task in two modes:
+同一个复杂任务跑两种模式：
 
-- Single-agent mode: one agent solves end to end.
-- Multi-agent mode: main agent delegates diagnosis/search/review.
+- 单 agent：一个 agent 从头做到尾。
+- 多 agent：主 agent 分发 diagnosis / search / review / verification 子任务。
 
-Compare:
+比较指标：
 
-- Pass rate.
-- Reasoning steps.
-- Tool calls.
-- Duplicate file reads.
-- Patch size.
-- Time to first correct target file.
-- Final failure category, if any.
+- pass rate。
+- reasoning steps。
+- tool calls。
+- 重复读取文件次数。
+- patch size。
+- 找到正确目标文件所需步数。
+- 失败分类。
 
-Expected advantage:
+预期体现：
 
-- Multi-agent should produce clearer evidence and fewer missed risks on complex tasks.
+- 多 agent 在复杂任务上应当降低诊断模糊度，提升证据质量，减少漏看风险。
 
-### Ablation B: With Protocol vs Free-Form Delegation
+## 消融 B：结构化协议 vs 自由文本分发
 
-Run one complex task with structured assignment/result schemas and one with free-form sub-agent instructions.
+同一个复杂任务跑两种子任务分发方式：
 
-Compare:
+- 结构化 assignment/result schema。
+- 自由文本口头分发。
 
-- Whether sub-agent output is directly usable.
-- Duplicate-work rate.
-- Main-agent synthesis quality.
-- Trace readability score.
+比较指标：
 
-Expected advantage:
+- 子 agent 输出是否可直接聚合。
+- 重复劳动比例。
+- 主 agent 汇总质量。
+- trace 可读性评分。
 
-- Structured protocol should make trace summaries easier to generate and reduce vague sub-agent outputs.
+预期体现：
 
-### Ablation C: With Trace Summary vs Raw Trace Only
+- 结构化协议应该减少含糊输出，让 trace summary 更容易生成。
 
-For several completed and failed runs, compare diagnosis effort:
+## 消融 C：trace summary vs raw trace only
 
-- Raw `trace.jsonl` only.
-- `trace_summary.md` plus raw trace fallback.
+选几个成功和失败 run，比较两种复盘方式：
 
-Compare:
+- 只看 raw `trace.jsonl`。
+- 先看 `trace_summary.md`，必要时再回 raw trace。
 
-- Time to identify root cause.
-- Correctness of failure classification.
-- Whether a human can tell what changed and why.
+比较指标：
 
-Expected advantage:
+- 定位失败原因所需时间。
+- 失败分类准确率。
+- 是否能快速知道改了什么、为什么改、怎么验证。
 
-- Trace summary should reduce diagnosis time and avoid confusing patch failures with infra failures.
+预期体现：
 
-### Ablation D: Workspace Guard On vs Off
+- trace summary 应显著降低复盘成本，避免把 infra error 误判成 patch failed。
 
-Use a task where the model is likely to run commands from the repository root.
+## 消融 D：workspace guard 开启 vs 关闭
 
-Compare:
+选择容易让模型跑错目录的任务，比较：
 
-- Guard enabled.
-- Guard disabled or report-only.
+- workspace guard 开启。
+- workspace guard 关闭或仅记录不拦截。
 
-Compare:
+比较指标：
 
-- Incorrect test commands.
-- Escaped paths.
-- False failures caused by running the wrong test suite.
+- 错误测试命令数量。
+- workspace escape 次数。
+- 因跑错测试目录导致的误失败数量。
 
-Expected advantage:
+预期体现：
 
-- Workspace guard should reduce invalid verification and misleading failures.
+- workspace guard 应减少错误验证和误导性失败。
 
-## Core Metrics
-
-Collect these for every task:
+## 每个任务都要收集的核心指标
 
 ```text
 task_id
@@ -387,7 +418,7 @@ patch_bytes
 duration_seconds
 ```
 
-Collect these for multi-agent tasks:
+多 agent 任务额外收集：
 
 ```text
 assignments_created
@@ -401,7 +432,7 @@ conflicts_resolved
 main_agent_decision_recorded
 ```
 
-Collect these for trace readability:
+trace 可读性额外收集：
 
 ```text
 trace_summary_exists
@@ -412,38 +443,38 @@ trace_summary_has_tool_timeline
 diagnosis_time_minutes
 ```
 
-## Success Targets
+## 成功目标
 
-Minimum targets:
+最低目标：
 
-- At least 12 tasks run.
-- At least 9 tasks complete without infrastructure errors.
-- At least 3 complex tasks run in multi-agent mode.
-- At least 2 ablation comparisons completed.
-- 100% of runs produce `trace_summary.md` or equivalent summary artifact.
-- 100% of runs record workspace root and allowed root.
-- Zero successful writes outside allowed workspace.
+- 至少跑 12 个任务。
+- 至少 9 个任务不是 infra error，能完整完成评测。
+- 至少 3 个复杂任务使用多 agent 模式。
+- 至少完成 2 组消融对比。
+- 100% run 生成 `trace_summary.md` 或等价摘要。
+- 100% run 记录 workspace root 和 allowed root。
+- 0 次成功写入 workspace 外。
 
-Strong targets:
+更理想目标：
 
-- At least 10 of 12 tasks pass or are correctly classified as infra errors.
-- Complex multi-agent tasks show lower diagnosis ambiguity than single-agent baselines.
-- Trace summaries allow failure classification in under 3 minutes per run.
-- Workspace mistakes are denied and recovered from, not allowed to poison verification.
+- 12 个任务中至少 10 个通过，或者失败被正确分类。
+- 复杂多 agent 任务相比单 agent，诊断更清楚、证据更完整。
+- 失败 run 能在 3 分钟内完成主要原因定位。
+- workspace 错误会被拦截并恢复，而不是污染测试结果。
 
-## Framework Changes To Consider
+## 明天优先考虑的框架改动
 
-Prioritize small changes that make runs easier to trust.
+优先做小而关键的改动，让每次 run 更可信。
 
-1. Add `trace_summary.md` and `trace_summary.json` generation after every run.
-2. Add explicit workspace metadata to model context and final run reports.
-3. Add a multi-agent assignment/result schema.
-4. Add a main-agent synthesis record that explains which sub-agent findings were used.
-5. Add failure categories to run reports.
-6. Add metrics extraction for ablation comparisons.
-7. Add a compact eval dashboard row per task.
+1. 每个 run 后生成 `trace_summary.md` 和 `trace_summary.json`。
+2. 模型上下文和报告中显式写入 workspace 信息。
+3. 增加主 agent / 子 agent assignment 和 result schema。
+4. 增加主 agent synthesis record，记录采纳了哪些子 agent 发现。
+5. 给 run report 增加 failure category。
+6. 提取消融实验需要的 metrics。
+7. 生成每个任务一行的 eval dashboard 数据。
 
-Suggested failure categories:
+建议失败分类：
 
 ```text
 pass
@@ -462,25 +493,25 @@ verifier_error
 protocol_error
 ```
 
-## Deliverables
+## 明天交付物
 
-Tomorrow's concrete deliverables:
+明天结束时希望留下：
 
-- A 12-task run set with result artifacts.
-- At least 3 complex multi-agent traces.
-- At least 2 ablation comparisons.
-- A first version of trace summary generation.
-- A documented main-agent/sub-agent protocol.
-- A workspace clarity patch or prompt/runtime change.
-- A final report classifying each failure and listing next framework fixes.
+- 一组 12 个任务的运行结果。
+- 至少 3 条复杂多 agent 任务 trace。
+- 至少 2 组消融实验结果。
+- 第一版 trace summary 生成逻辑或产物。
+- 一份主 agent / 子 agent 协议说明。
+- 一处 workspace 明确化的 prompt/runtime/report 改动。
+- 一份最终复盘报告：每个任务的结果、失败分类、下一步框架修复点。
 
-## Final Review Questions
+## 最终复盘问题
 
-Use these questions to decide whether the day succeeded:
+明天结束时，用这些问题判断是否达到目标：
 
-- Can I tell from the summary why each task passed or failed?
-- Can I distinguish patch failure from Docker or dependency failure?
-- Can I see where the workspace was resolved and enforced?
-- Did sub-agents produce evidence the main agent actually used?
-- Did multi-agent mode improve reliability, diagnosis clarity, or patch quality?
-- Are the remaining failures tied to concrete system changes?
+- 我能不能从摘要里看出每个任务为什么通过或失败？
+- 我能不能区分 patch 错误和 Docker / 依赖 / 网络错误？
+- 我能不能清楚看到 workspace 是哪里，以及有没有被强制执行？
+- 子 agent 的发现有没有被主 agent 真正使用？
+- 多 agent 相比单 agent 是否提升了可靠性、诊断清晰度或 patch 质量？
+- 剩下的问题是否都能落到具体框架改动上？

@@ -23,6 +23,7 @@ class PluginContext:
     tool_registry: Any
     sessions: Any = None
     memory_store: Any = None
+    plugin_manager: Any = None
 
 
 @dataclass

@@ -513,6 +513,43 @@ Use for bounded exploration or implementation work when a one-off result is enou
         ["prompt"],
     ),
     function_tool(
+        "parallel_tasks",
+        """Spawn several short-lived subagents in parallel for independent subtasks.
+Use when exploration, review, or implementation shards do not depend on each other.""",
+        {
+            "tasks": {
+                "type": "array",
+                "maxItems": 8,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "prompt": {
+                            "type": "string",
+                            "description": "Detailed instructions for this subagent.",
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "Short task name for display.",
+                        },
+                        "agent_type": {
+                            "type": "string",
+                            "enum": ["explore", "code", "plan"],
+                            "description": "Subagent type.",
+                        },
+                    },
+                    "required": ["prompt"],
+                },
+            },
+            "max_workers": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 8,
+                "description": "Optional parallel worker count.",
+            },
+        },
+        ["tasks"],
+    ),
+    function_tool(
         "compact",
         "Manually compress the conversation history into a continuity summary.",
         {

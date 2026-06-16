@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from coding_runtime.background_task import BG
 from config import WORKDIR
+from bus import AgentMessage, MessageType, render_agent_message
 from bus.team_bus import BUS
 from memory.store import MemoryStore
 from runtime.workspace import safe_workspace_path, workspace_root_for_session
@@ -23,6 +24,18 @@ from user_scope import (
     memory_root_for_session,
     storage_root_for_session,
 )
+
+
+SUBAGENT_RUNNER = None
+
+
+def configure_subagent_runner(runner) -> None:
+    global SUBAGENT_RUNNER
+    SUBAGENT_RUNNER = runner
+
+
+def _format_tool_error(exc: Exception) -> str:
+    return f"Error: {type(exc).__name__}: {exc}"
 
 
 def safe_path(p: str, *, session=None) -> Path:
@@ -58,7 +71,7 @@ def run_list_files(path: str = "", recursive: bool = False, *, _session=None) ->
             "truncated": len(entries) >= 500,
         }, ensure_ascii=False, indent=2)
     except Exception as e:
-        return f"Error: {e}"
+        return _format_tool_error(e)
 
 
 def run_read(path: str, limit: int = None, *, _session=None) -> str:
@@ -69,7 +82,7 @@ def run_read(path: str, limit: int = None, *, _session=None) -> str:
             lines = lines[:limit] + [f"... ({len(lines) - limit} more lines)"]
         return "\n".join(lines)[:50000]
     except Exception as e:
-        return f"Error: {e}"
+        return _format_tool_error(e)
     
 def run_write(path: str, content: str, *, _session=None) -> str:
     try:
@@ -78,7 +91,7 @@ def run_write(path: str, content: str, *, _session=None) -> str:
         fp.write_text(content)
         return f"Wrote {len(content)} bytes to {path}"
     except Exception as e:
-        return f"Error: {e}"
+        return _format_tool_error(e)
     
 def run_edit(path: str, old_text: str, new_text: str, *, _session=None) -> str:
     try:
@@ -89,7 +102,7 @@ def run_edit(path: str, old_text: str, new_text: str, *, _session=None) -> str:
         fp.write_text(content.replace(old_text, new_text, 1))
         return f"Edited {path}"
     except Exception as e:
-        return f"Error: {e}"
+        return _format_tool_error(e)
 
 
 MAX_STORAGE_READ_BYTES = 1_000_000
@@ -203,7 +216,7 @@ def run_git_status(porcelain: bool = False, *, _session=None) -> str:
         args = ["status", "--short"] if porcelain else ["status", "--branch", "--short"]
         return _run_git(args, _session=_session)
     except Exception as e:
-        return f"Error: {e}"
+        return _format_tool_error(e)
 
 
 def run_git_diff(
@@ -223,7 +236,7 @@ def run_git_diff(
             args.extend(["--", _git_pathspec(path, _session=_session)])
         return _run_git(args, _session=_session)
     except Exception as e:
-        return f"Error: {e}"
+        return _format_tool_error(e)
 
 
 def run_git_log(max_count: int = 10, *, _session=None) -> str:
@@ -242,7 +255,7 @@ def run_git_log(max_count: int = 10, *, _session=None) -> str:
             _session=_session,
         )
     except Exception as e:
-        return f"Error: {e}"
+        return _format_tool_error(e)
 
 
 def run_git_branch(all: bool = False, *, _session=None) -> str:
@@ -252,7 +265,7 @@ def run_git_branch(all: bool = False, *, _session=None) -> str:
             args.append("--all")
         return _run_git(args, _session=_session)
     except Exception as e:
-        return f"Error: {e}"
+        return _format_tool_error(e)
 
 
 def run_git_add(paths, *, _session=None) -> str:
@@ -260,7 +273,7 @@ def run_git_add(paths, *, _session=None) -> str:
         pathspecs = _git_pathspecs(paths, _session=_session)
         return _run_git(["add", "--", *pathspecs], _session=_session)
     except Exception as e:
-        return f"Error: {e}"
+        return _format_tool_error(e)
 
 
 def run_git_commit(message: str, *, _session=None) -> str:
@@ -281,7 +294,7 @@ def run_git_commit(message: str, *, _session=None) -> str:
             _session=_session,
         )
     except Exception as e:
-        return f"Error: {e}"
+        return _format_tool_error(e)
 
 
 def _sandbox_scope_root(session, *, create: bool = True) -> Path:
@@ -403,7 +416,7 @@ def run_storage_list(path: str = "", *, _session=None) -> str:
             "truncated": truncated,
         }, ensure_ascii=False, indent=2)
     except Exception as e:
-        return f"Error: {e}"
+        return _format_tool_error(e)
 
 
 def run_storage_read(path: str, limit: int = None, *, _session=None) -> str:
@@ -411,7 +424,7 @@ def run_storage_read(path: str, limit: int = None, *, _session=None) -> str:
         target = _safe_storage_path(_storage_root(_session), path)
         return _read_text_file(target, path_label=path, limit=limit)
     except Exception as e:
-        return f"Error: {e}"
+        return _format_tool_error(e)
 
 
 def run_storage_write(path: str, content: str, *, _session=None) -> str:
@@ -454,7 +467,7 @@ def run_storage_write(path: str, content: str, *, _session=None) -> str:
             "bytes": len(encoded),
         }, ensure_ascii=False)
     except Exception as e:
-        return f"Error: {e}"
+        return _format_tool_error(e)
 
 
 def _append_storage_write_record(
@@ -535,7 +548,7 @@ def run_sandbox_list(path: str = "", *, _session=None) -> str:
             "truncated": truncated,
         }, ensure_ascii=False, indent=2)
     except Exception as e:
-        return f"Error: {e}"
+        return _format_tool_error(e)
 
 
 def run_sandbox_read(path: str, limit: int = None, *, _session=None) -> str:
@@ -546,7 +559,7 @@ def run_sandbox_read(path: str, limit: int = None, *, _session=None) -> str:
         _touch_sandbox_scope(scope)
         return output
     except Exception as e:
-        return f"Error: {e}"
+        return _format_tool_error(e)
 
 
 def run_sandbox_write(
@@ -590,7 +603,7 @@ def run_sandbox_write(
             "bytes": len(encoded),
         }, ensure_ascii=False)
     except Exception as e:
-        return f"Error: {e}"
+        return _format_tool_error(e)
 
 
 def run_publish_artifact(
@@ -650,7 +663,7 @@ def run_publish_artifact(
             "bytes": byte_count,
         }, ensure_ascii=False)
     except Exception as e:
-        return f"Error: {e}"
+        return _format_tool_error(e)
 
 
 def run_bash(command: str, *, _session=None) -> str:
@@ -666,7 +679,7 @@ def run_bash(command: str, *, _session=None) -> str:
     except subprocess.TimeoutExpired:
         return "Error: Timeout (120s)"
     except (FileNotFoundError, OSError) as e:
-        return f"Error: {e}"
+        return _format_tool_error(e)
     
 
 BASE_HANDLERS = {
@@ -757,6 +770,130 @@ def make_protocol_handlers(sender: str):
     }
 
 
+def _message_type(value: str | None) -> MessageType:
+    try:
+        return MessageType(str(value or "message"))
+    except ValueError:
+        return MessageType.MESSAGE
+
+
+def _send_structured_message(
+    *,
+    sender: str,
+    to: str,
+    content: str,
+    msg_type: str = "message",
+    payload: dict | None = None,
+) -> str:
+    message = AgentMessage(
+        sender=sender,
+        recipient=to,
+        type=_message_type(msg_type),
+        payload={"content": content, **(payload or {})},
+    )
+    return BUS.send(
+        message.sender,
+        message.recipient,
+        message.to_json(),
+        message.type.value,
+        {
+            "id": message.id,
+            "recipient": message.recipient,
+            "correlation_id": message.correlation_id,
+            "payload": message.payload,
+            "ttl_seconds": message.ttl_seconds,
+        },
+    )
+
+
+def _read_structured_inbox(name: str) -> str:
+    messages = BUS.read_inbox(name)
+    rendered = []
+    for message in messages:
+        try:
+            PROTOCOLS.notify_message(message)
+            rendered.append(render_agent_message(message))
+        except Exception:
+            rendered.append(json.dumps(message, ensure_ascii=False))
+    return "\n\n".join(rendered) if rendered else "Inbox is empty."
+
+
+def _spawn_teammate_with_protocol(team, name: str, role: str, prompt: str) -> str:
+    message = AgentMessage(
+        sender="lead",
+        recipient=name,
+        type=MessageType.TASK_ASSIGN,
+        payload={
+            "description": f"Initial task for teammate {name}",
+            "prompt": prompt,
+            "role": role,
+        },
+    )
+    return team.spawn(name, role, message.to_json())
+
+
+def _broadcast_structured(team, content: str) -> str:
+    count = 0
+    for name in team.member_names():
+        message = AgentMessage(
+            sender="lead",
+            recipient=name,
+            type=MessageType.BROADCAST,
+            payload={"content": content},
+        )
+        BUS.send(
+            message.sender,
+            message.recipient,
+            message.to_json(),
+            message.type.value,
+            {
+                "id": message.id,
+                "recipient": message.recipient,
+                "payload": message.payload,
+                "ttl_seconds": message.ttl_seconds,
+            },
+        )
+        count += 1
+    return f"Broadcast to {count} teammates"
+
+
+def _run_subagent_task(
+    *,
+    prompt: str,
+    description: str = "",
+    agent_type: str = "explore",
+    _session=None,
+) -> str:
+    if SUBAGENT_RUNNER is None:
+        return "Error: The short-lived subagent task runner is not configured."
+    result = SUBAGENT_RUNNER.run(
+        prompt=prompt,
+        description=description,
+        agent_type=agent_type,
+        parent_session=_session,
+    )
+    return json.dumps(result.to_dict(), ensure_ascii=False, indent=2)
+
+
+def _run_parallel_subagent_tasks(
+    *,
+    tasks,
+    max_workers: int | None = None,
+    _session=None,
+) -> str:
+    if SUBAGENT_RUNNER is None:
+        return "Error: The short-lived subagent task runner is not configured."
+    from agents.subagent.parallel import run_parallel_tasks
+
+    results = run_parallel_tasks(
+        runner=SUBAGENT_RUNNER,
+        tasks=tasks or [],
+        parent_session=_session,
+        max_workers=max_workers,
+    )
+    return json.dumps({"results": results}, ensure_ascii=False, indent=2)
+
+
 def make_lead_handlers(team):
     return {
         **BASE_HANDLERS,
@@ -768,37 +905,28 @@ def make_lead_handlers(team):
         **make_protocol_handlers("lead"),
 
         "compact": lambda **kw: "Manual compression requested.",
-        "task": lambda **kw: (
-            "Error: The short-lived subagent task tool is not wired in this "
-            "DeepSeek harness. Use spawn_teammate for persistent teammates."
-        ),
+        "task": _run_subagent_task,
+        "parallel_tasks": _run_parallel_subagent_tasks,
         "claim_task": lambda **kw: TASKS.claim_task(
             kw["task_id"],
             "lead",
         ),
 
-        "spawn_teammate": lambda **kw: team.spawn(
+        "spawn_teammate": lambda **kw: _spawn_teammate_with_protocol(
+            team,
             kw["name"],
             kw["role"],
             kw["prompt"],
         ),
         "list_teammates": lambda **kw: team.list_all(),
-        "broadcast": lambda **kw: BUS.broadcast(
-            "lead",
-            kw["content"],
-            team.member_names(),
+        "broadcast": lambda **kw: _broadcast_structured(team, kw["content"]),
+        "send_message": lambda **kw: _send_structured_message(
+            sender="lead",
+            to=kw["to"],
+            content=kw["content"],
+            msg_type=kw.get("msg_type", "message"),
         ),
-        "send_message": lambda **kw: BUS.send(
-            "lead",
-            kw["to"],
-            kw["content"],
-            kw.get("msg_type", "message"),
-        ),
-        "read_inbox": lambda **kw: json.dumps(
-            BUS.read_inbox("lead"),
-            indent=2,
-            ensure_ascii=False,
-        ),
+        "read_inbox": lambda **kw: _read_structured_inbox("lead"),
         "shutdown_request": lambda **kw: PROTOCOLS.handle_shutdown_request(
             kw["teammate"],
         ),
@@ -825,17 +953,13 @@ def make_teammate_handlers(name: str):
             name,
         ),
 
-        "send_message": lambda **kw: BUS.send(
-            name,
-            kw["to"],
-            kw["content"],
-            kw.get("msg_type", "message"),
+        "send_message": lambda **kw: _send_structured_message(
+            sender=name,
+            to=kw["to"],
+            content=kw["content"],
+            msg_type=kw.get("msg_type", "message"),
         ),
-        "read_inbox": lambda **kw: json.dumps(
-            BUS.read_inbox(name),
-            indent=2,
-            ensure_ascii=False,
-        ),
+        "read_inbox": lambda **kw: _read_structured_inbox(name),
     }
 
 TEAMMATE_HANDLER = make_teammate_handlers("")

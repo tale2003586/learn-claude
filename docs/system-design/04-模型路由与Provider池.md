@@ -24,7 +24,9 @@
 - `models/model_pool.py`
 - `models/provider.py`
 - `models/model_task_runner.py`
-- `config.py`
+- `runtime/bootstrap.py`
+
+`config.py` 现在只保留轻量配置读取和 system prompt helper。模型池不在 import 阶段构造，而是由 `runtime/bootstrap.py` 懒加载，避免普通脚本 import 时立刻读取所有 provider 环境变量或触发网络健康检查。
 
 ## ModelProfile
 
@@ -53,7 +55,9 @@ class ModelProfile:
 - wire api 类型。
 - fallback provider 链。
 
-当前默认 provider settings 包含 deepseek、mimo、openai 这类 OpenAI-compatible provider。
+当前默认 provider settings 包含 deepseek、mimo、openai relay、gemini 这类 provider。大多数 provider 走 OpenAI-compatible chat completions；需要特殊协议时由 `wire_api` 区分。
+
+同一个供应商的不同模型应该配置成不同 profile。例如 `deepseek_pro` 和 `deepseek_flash` 都可以使用 `provider="deepseek"`，但 `model` 不同。这样 route、fallback、健康状态和 trace 都能按 profile 粒度区分，而不是只按供应商区分。
 
 ## route 是什么
 
@@ -62,9 +66,9 @@ class ModelProfile:
 例如：
 
 ```python
-MODEL_POOL.routed_provider("chat")
-MODEL_POOL.routed_provider("coding")
-MODEL_POOL.routed_provider("summary")
+model_pool.routed_provider("chat")
+model_pool.routed_provider("coding")
+model_pool.routed_provider("summary")
 ```
 
 route 配置来自环境变量，例如：
@@ -174,11 +178,13 @@ summary、history summarizer、task conclusion 这些一次性模型任务不走
 
 这些任务只需要一次模型请求，不需要完整 `ReasoningLoop`。
 
+`ModelTaskRunner.run_text()` 支持 `on_error` 回调。调用方可以在 history summary、候选记忆提取、RAG route classifier 这类后台模型任务失败时写 trace 或降级，而不是把一次辅助模型失败直接变成主 run 失败。
+
 在 `runtime/bootstrap.py` 中：
 
 ```python
 model_task_runner = ModelTaskRunner(
-    model_pool=MODEL_POOL,
+    model_pool=model_pool,
     default_max_tokens=800,
 )
 ```
@@ -229,15 +235,14 @@ Invalid assistant message: content or tool_calls must be set
 
 ## 当前边界
 
-当前模型路由已经支持 purpose 和 fallback，但还没有：
+当前模型路由已经支持 purpose、fallback、轻量健康状态和 cooldown。它还没有：
 
 - 按成本/延迟动态选择模型。
 - 基于任务难度自动升级模型。
-- provider 健康检查。
-- 熔断器。
+- 成熟的熔断器和半开探测策略。
 - route 配置热更新。
 
-现在更准确的说法是：静态 purpose route + fallback chain。
+现在更准确的说法是：静态 purpose route + fallback chain + profile 级失败计数和冷却跳过。
 
 ## 总结
 

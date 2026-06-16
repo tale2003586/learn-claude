@@ -10,6 +10,7 @@ from bus.user_bus import MessageBus
 from plugins import PluginManager
 from plugins.run_report import RunReportPlugin
 from runtime.agent_loop import AgentLoop
+from runtime.context import ContextBuilder as RealContextBuilder
 from runtime.pipeline import Pipeline
 from models.provider import LLMResponse, ToolCall
 from runtime.trace.run_state import RunState
@@ -17,6 +18,7 @@ from runtime.trace.trace_store import TraceStore
 from runtime.trace.workspace import capture_workspace_snapshot, diff_workspace_snapshots
 from runtime.workspace import WorkspaceResolver
 from memory.store import MemoryStore
+from memory.lifecycle import MemoryLifecycleResult
 from runtime.routing.router import ModeRouter
 from sessions.session import Session, SessionManager
 from agents.coding.conclusions import ConclusionExtraction
@@ -58,6 +60,47 @@ class RecordingSessions:
 
     def save(self, session: Session) -> None:
         self.saved.append(session)
+
+
+class FakeMemoryLifecycle:
+    def after_turn(self, session) -> MemoryLifecycleResult:
+        result = MemoryLifecycleResult(
+            pending_added=1,
+            candidates_updated=1,
+            related_triggered=0,
+            promoted_count=1,
+            vector_indexed=1,
+            vector_errors=0,
+            history_updated=True,
+            recent_context_updated=True,
+        )
+        result.trace_events.extend([
+            {
+                "event": "memory.candidate.evaluated",
+                "payload": {
+                    "source_ref": "web:default:1",
+                    "method": "history_vector_similarity",
+                    "similar_hit_count": 2,
+                    "candidate_selected": True,
+                },
+            },
+            {
+                "event": "memory.candidate.promoted",
+                "payload": {
+                    "candidate_id": "mem_cand_0001",
+                    "memory_text_preview": "用户偏好使用 pytest。",
+                },
+            },
+            {
+                "event": "memory.history_vector.upserted",
+                "payload": {
+                    "source_ref": "web:default:1",
+                    "source_type": "session_turn",
+                    "message_count": 2,
+                },
+            },
+        ])
+        return result
 
 
 def _tool_response(index: int, name="echo", arguments=None) -> LLMResponse:
@@ -102,6 +145,27 @@ def _pipeline(provider) -> Pipeline:
         model="test-model",
         tool_executor=ToolExecutor([]),
         context_builder=ContextBuilder(),
+    )
+
+
+def _pipeline_with_memory_trace(provider) -> Pipeline:
+    return Pipeline(
+        tools=_registry(),
+        provider=provider,
+        model="test-model",
+        tool_executor=ToolExecutor([]),
+        context_builder=ContextBuilder(),
+        memory_lifecycle=FakeMemoryLifecycle(),
+    )
+
+
+def _real_context_pipeline(provider) -> Pipeline:
+    return Pipeline(
+        tools=_registry(),
+        provider=provider,
+        model="test-model",
+        tool_executor=ToolExecutor([]),
+        context_builder=RealContextBuilder(),
     )
 
 
@@ -160,6 +224,34 @@ def _events(path: Path) -> list[dict]:
 
 
 class RunTraceTests(unittest.TestCase):
+    def test_tool_loop_context_preserves_active_turn_order(self) -> None:
+        session = Session(id="web:default", current_mode="bot")
+        session.add_message("user", "old task " + ("x" * 300))
+        session.add_message("assistant", "old answer")
+        session.add_message("user", "please echo")
+        provider = ScriptedProvider([
+            _tool_response(1, arguments={"text": "hello"}),
+            _final_response("done"),
+        ])
+        pipeline = _real_context_pipeline(provider)
+
+        pipeline.run(
+            session,
+            SimpleNamespace(tool_mode="bot"),
+        )
+
+        self.assertEqual(2, len(provider.calls))
+        second_call_messages = provider.calls[1]["messages"]
+        active_start = next(
+            index
+            for index, message in enumerate(second_call_messages)
+            if message.get("role") == "user" and message.get("content") == "please echo"
+        )
+        active_messages = second_call_messages[active_start:]
+        self.assertEqual(["user", "assistant", "tool"], [m["role"] for m in active_messages])
+        self.assertEqual("call-1", active_messages[1]["tool_calls"][0]["id"])
+        self.assertEqual("call-1", active_messages[2]["tool_call_id"])
+
     def test_agent_loop_writes_run_state_trace_and_report_for_tool_turn(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             trace_store = TraceStore(Path(tmp) / ".runs")
@@ -236,6 +328,71 @@ class RunTraceTests(unittest.TestCase):
             self.assertIn("Tool Activity", markdown_report)
             self.assertIn("echo", markdown_report)
             self.assertIn("done", markdown_report)
+
+    def test_memory_lifecycle_trace_events_are_recorded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            trace_store = TraceStore(Path(tmp) / ".runs")
+            session = Session(id="web:default", current_mode="bot")
+            sessions = RecordingSessions(session)
+            provider = ScriptedProvider([_final_response("done")])
+            bus = MessageBus()
+            loop = AgentLoop(
+                bus,
+                sessions,
+                _pipeline_with_memory_trace(provider),
+                ModeRouter(),
+                plugin_manager=PluginManager([], workspace=Path(tmp), tool_registry=_registry()),
+                trace_store=trace_store,
+            )
+
+            async def run() -> str:
+                await bus.publish_inbound(InboundMessage(
+                    channel="web",
+                    chat_id="default",
+                    sender="user",
+                    content="我希望这个项目用 pytest 写测试",
+                    metadata={"user_id": "local", "user_role": "admin"},
+                ))
+                await loop.run_once()
+                outbound = await bus._outbound.get()
+                return outbound.content
+
+            self.assertEqual("done", asyncio.run(run()))
+
+            run_dir = trace_store.run_dir(session.metadata["last_run_id"])
+            events = _events(run_dir / "trace.jsonl")
+            by_name = {event["event"]: event for event in events}
+            trace_summary = json.loads(
+                (run_dir / "trace_summary.json").read_text(encoding="utf-8")
+            )
+
+            self.assertIn("memory.candidate.evaluated", by_name)
+            self.assertIn("memory.candidate.promoted", by_name)
+            self.assertIn("memory.history_vector.upserted", by_name)
+            self.assertIn("memory.lifecycle.completed", by_name)
+            self.assertEqual(
+                2,
+                by_name["memory.candidate.evaluated"]["payload"]["similar_hit_count"],
+            )
+            self.assertTrue(
+                by_name["memory.candidate.evaluated"]["payload"]["candidate_selected"]
+            )
+            self.assertEqual(
+                "session_turn",
+                by_name["memory.history_vector.upserted"]["payload"]["source_type"],
+            )
+            self.assertEqual(
+                1,
+                by_name["memory.lifecycle.completed"]["payload"]["promoted_count"],
+            )
+            self.assertEqual(
+                1,
+                trace_summary["memory"]["candidate_evaluations"],
+            )
+            self.assertEqual(
+                1,
+                trace_summary["memory"]["candidate_promotions"],
+            )
 
     def test_coding_task_session_is_bound_to_parent_run(self) -> None:
         class Extractor:
@@ -348,6 +505,105 @@ class RunTraceTests(unittest.TestCase):
             self.assertIn("context.sanitized", event_names)
             self.assertEqual(1, metrics["sanitized_messages"])
             self.assertNotIn({"role": "assistant", "content": None}, sent_messages)
+
+    def test_context_sanitizer_converts_incomplete_tool_call_group(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            trace_store = TraceStore(Path(tmp) / ".runs")
+            session = Session(id="web:default", current_mode="bot")
+            session.messages.append({
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": "call_missing",
+                    "type": "function",
+                    "function": {"name": "web_search", "arguments": "{\"query\":\"x\"}"},
+                }],
+            })
+            session.add_message("user", "hello")
+            sessions = RecordingSessions(session)
+            provider = ScriptedProvider([_final_response("clean")])
+            bus = MessageBus()
+            loop = AgentLoop(
+                bus,
+                sessions,
+                _pipeline(provider),
+                ModeRouter(),
+                trace_store=trace_store,
+            )
+
+            async def run() -> None:
+                await bus.publish_inbound(InboundMessage(
+                    channel="web",
+                    chat_id="default",
+                    sender="user",
+                    content="hello again",
+                    metadata={"user_id": "local", "user_role": "admin"},
+                ))
+                await loop.run_once()
+                await bus._outbound.get()
+
+            asyncio.run(run())
+
+            sent_messages = provider.calls[0]["messages"]
+            self.assertFalse(any(message.get("tool_calls") for message in sent_messages))
+            self.assertTrue(any(
+                "incomplete assistant tool-call group" in str(message.get("content") or "")
+                for message in sent_messages
+                if message.get("role") == "user"
+            ))
+
+    def test_context_sanitizer_converts_interrupted_tool_call_group(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            trace_store = TraceStore(Path(tmp) / ".runs")
+            session = Session(id="web:default", current_mode="bot")
+            session.add_message("user", "old")
+            session.messages.append({
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": "call_interrupted",
+                    "type": "function",
+                    "function": {"name": "web_search", "arguments": "{\"query\":\"x\"}"},
+                }],
+            })
+            session.add_message("user", "<tool_catalog>inserted in the wrong place</tool_catalog>")
+            session.messages.append({
+                "role": "tool",
+                "tool_call_id": "call_interrupted",
+                "content": "result after interruption",
+            })
+            sessions = RecordingSessions(session)
+            provider = ScriptedProvider([_final_response("clean")])
+            bus = MessageBus()
+            loop = AgentLoop(
+                bus,
+                sessions,
+                _pipeline(provider),
+                ModeRouter(),
+                trace_store=trace_store,
+            )
+
+            async def run() -> None:
+                await bus.publish_inbound(InboundMessage(
+                    channel="web",
+                    chat_id="default",
+                    sender="user",
+                    content="hello again",
+                    metadata={"user_id": "local", "user_role": "admin"},
+                ))
+                await loop.run_once()
+                await bus._outbound.get()
+
+            asyncio.run(run())
+
+            sent_messages = provider.calls[0]["messages"]
+            self.assertFalse(any(message.get("tool_calls") for message in sent_messages))
+            self.assertFalse(any(message.get("role") == "tool" for message in sent_messages))
+            self.assertTrue(any(
+                "orphan tool result" in str(message.get("content") or "")
+                for message in sent_messages
+                if message.get("role") == "user"
+            ))
 
     def test_markdown_report_records_failed_run_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

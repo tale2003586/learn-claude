@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Iterable
+from weakref import WeakKeyDictionary
 
 from .base import EvalContext, Plugin, PluginContext, RunContext, TurnContext, TurnResult
 
@@ -22,6 +23,7 @@ class PluginManager:
         self.loaded_names: list[str] = []
         self._tool_names: list[str] = []
         self._tool_hooks = []
+        self._plugin_refs = WeakKeyDictionary()
 
         for plugin in plugins or []:
             self.register(plugin)
@@ -36,9 +38,13 @@ class PluginManager:
             tool_registry=self.tool_registry,
             sessions=self.sessions,
             memory_store=self.memory_store,
+            plugin_manager=self,
         )
         plugin.setup(context)
-        setattr(plugin, "_plugin_manager", self)
+        try:
+            self._plugin_refs[plugin] = self
+        except TypeError:
+            pass
         self.plugins.append(plugin)
         self.loaded_names.append(plugin.name)
 

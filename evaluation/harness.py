@@ -314,6 +314,19 @@ class CodingBenchmarkHarness:
         row["status"] = "pass" if row["passed"] else "fail"
         row["failure_category"] = "" if row["passed"] else failure_category(row)
         row["failure_reason"] = "" if row["passed"] else diagnose_failure(row)
+        trace_store.write_report(run_state, {
+            "benchmark_task_id": task.id,
+            "category": task.category,
+            "workspace_root": str(workspace),
+            "status": row["status"],
+            "passed": row["passed"],
+            "failure_category": row["failure_category"],
+            "failure_reason": row["failure_reason"],
+            "verifier": verifier,
+            "within_budget": within_budget,
+            "workspace_diff_passed": workspace_diff_passed,
+            "trace_passed": trace_passed,
+        })
         return row
 
     def _fresh_workspace(self, task: BenchmarkTask, workspaces_root: Path) -> Path:
@@ -330,9 +343,10 @@ class CodingBenchmarkHarness:
     def _provider_for_task(self, task: BenchmarkTask):
         if self.runner_mode == "scripted":
             return ScriptedProvider(task.script), "scripted-coding-benchmark"
-        from config import MODEL_POOL
+        from runtime.bootstrap import get_model_pool
 
-        return MODEL_POOL.routed_provider("coding"), MODEL_POOL.model_for("coding")
+        model_pool = get_model_pool()
+        return model_pool.routed_provider("coding"), model_pool.model_for("coding")
 
     def _runner_metadata(self) -> dict[str, Any]:
         if self.runner_mode == "scripted":
@@ -340,11 +354,13 @@ class CodingBenchmarkHarness:
                 "provider": "ScriptedProvider",
                 "model": "scripted-coding-benchmark",
             }
-        from config import MODEL_POOL
+        from runtime.bootstrap import get_model_pool
+
+        model_pool = get_model_pool()
 
         return {
             "provider": "MODEL_POOL:coding",
-            "model": MODEL_POOL.model_for("coding"),
+            "model": model_pool.model_for("coding"),
         }
 
     def _emit(self, event: str, payload: dict[str, Any]) -> None:

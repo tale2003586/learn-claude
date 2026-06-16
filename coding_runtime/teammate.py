@@ -3,9 +3,12 @@ import json
 from pathlib import Path
 import threading
 import time
+import traceback
 
+from bus import AgentMessage, MessageType, render_agent_message
 from bus.team_bus import BUS
-from config import MODEL_POOL, WORKDIR
+from config import WORKDIR
+from coding_runtime.protocols import PROTOCOLS
 from runtime.agent_runner import AgentRunner
 from runtime.agent_spec import AgentSpec
 from runtime.context import ContextBundle
@@ -30,9 +33,11 @@ class TeammateContextBuilder:
     def build(self, *, session, profile) -> ContextBundle:
         inbox = BUS.read_inbox(self.name)
         for msg in inbox:
+            PROTOCOLS.notify_message(msg)
             session.messages.append({
                 "role": "user",
-                "content": json.dumps(msg, ensure_ascii=False),
+                "content": _render_inbound_message(msg),
+                "metadata": {"kind": "teammate_inbox"},
             })
         return ContextBundle(messages=[
             {"role": "system", "content": profile.system_prompt},
@@ -50,9 +55,9 @@ class TeammateManager:
         self._clear_stale_working_members()
         self.idle_timeout = 60  # seconds to wait in idle state before checking for new tasks
         self.poll_interval = 10  # seconds to check for new tasks while idle
-        self.model_pool = MODEL_POOL
-        self.provider = MODEL_POOL.routed_provider("teammate")
-        self.model = MODEL_POOL.model_for("teammate")
+        self.model_pool = None
+        self.provider = None
+        self.model = ""
         self.tool_executor = ToolExecutor([
             FileWriteScopeHook(),
             ToolLoopGuardHook(),
@@ -61,6 +66,15 @@ class TeammateManager:
         self.reflection_agent = None
         self.max_tokens = 8000
         self.max_reasoning_steps = 50
+
+    def _ensure_model_defaults(self) -> None:
+        if self.provider is not None and self.model:
+            return
+        from runtime.bootstrap import get_model_pool
+
+        self.model_pool = get_model_pool()
+        self.provider = self.model_pool.routed_provider("teammate")
+        self.model = self.model_pool.model_for("teammate")
 
     def configure(
         self,
@@ -160,6 +174,8 @@ class TeammateManager:
                     return
             except Exception as e:
                 print(f"[{name}] Error: {e}")
+                self._send_error_to_lead(name, e)
+                self._set_status(name, "error")
                 break
 
             #进入空闲状态，需要检测是否有新任务
@@ -172,9 +188,11 @@ class TeammateManager:
                 inbox = BUS.read_inbox(name)
                 if inbox:
                     for msg in inbox:
+                        PROTOCOLS.notify_message(msg)
                         session.messages.append({
                             "role": "user",
-                            "content": json.dumps(msg, ensure_ascii=False),
+                            "content": _render_inbound_message(msg),
+                            "metadata": {"kind": "teammate_inbox"},
                         })
                     resume = True
                     break
@@ -218,7 +236,7 @@ class TeammateManager:
                 "user_role": "admin",
             },
         )
-        session.add_message("user", prompt)
+        session.add_message("user", _render_initial_prompt(prompt))
         return session
 
     def _profile_for(self, name: str, role: str, team_name: str) -> ModeProfile:
@@ -243,6 +261,7 @@ class TeammateManager:
         tools,
         context_builder: TeammateContextBuilder,
     ) -> TeammateCycleState:
+        self._ensure_model_defaults()
         state = TeammateCycleState()
         runner = AgentRunner(
             tools=tools,
@@ -294,6 +313,29 @@ class TeammateManager:
                 state.should_idle = True
             print(f"[{name}] {tool_name}: {output[:120]}")
         return state.should_shutdown or state.should_idle
+
+    def _send_error_to_lead(self, name: str, exc: Exception) -> None:
+        message = AgentMessage(
+            sender=name,
+            recipient="lead",
+            type=MessageType.ERROR,
+            payload={
+                "error": f"{type(exc).__name__}: {exc}",
+                "traceback": traceback.format_exc(),
+            },
+        )
+        BUS.send(
+            message.sender,
+            message.recipient,
+            message.to_json(),
+            message.type.value,
+            {
+                "id": message.id,
+                "recipient": message.recipient,
+                "payload": message.payload,
+                "ttl_seconds": message.ttl_seconds,
+            },
+        )
                             
 
     def list_all(self) -> str:
@@ -309,3 +351,17 @@ class TeammateManager:
 
 
 TEAM = TeammateManager(WORKDIR / ".team")
+
+
+def _render_initial_prompt(prompt: str) -> str:
+    try:
+        return render_agent_message(prompt)
+    except Exception:
+        return prompt
+
+
+def _render_inbound_message(message) -> str:
+    try:
+        return render_agent_message(message)
+    except Exception:
+        return json.dumps(message, ensure_ascii=False)

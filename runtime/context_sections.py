@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 from typing import Any
 
 
@@ -77,4 +78,7 @@ def message_chars(messages: list[dict]) -> int:
         total += len(str(message.get("role") or ""))
         content = message.get("content")
         total += len(str(content or ""))
+        for key in ("tool_calls", "tool_call_id", "name", "status"):
+            if key in message:
+                total += len(json.dumps(message.get(key), ensure_ascii=False, default=str))
     return total

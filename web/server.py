@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+"""Stdlib web console server.
+
+For production deployment, run this behind a TLS-terminating reverse proxy
+such as nginx/Caddy and restrict direct access to the Python process.
+"""
+
 import argparse
 import asyncio
 import base64
@@ -12,9 +18,10 @@ import shutil
 import sys
 import threading
 import traceback
-import warnings
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from email import policy
+from email.parser import BytesParser
 from html import escape as html_escape
 from http import HTTPStatus
 from http.cookies import SimpleCookie
@@ -22,11 +29,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, quote, unquote, urlparse
-
-with warnings.catch_warnings():
-    warnings.filterwarnings("ignore", category=DeprecationWarning, message="'cgi' is deprecated.*")
-    import cgi
-
 
 ROOT = Path(__file__).resolve().parents[1]
 STATIC_DIR = ROOT / "web" / "static"
@@ -81,6 +83,50 @@ MAX_BODY_BYTES = int(os.environ.get("WEB_MAX_BODY_BYTES", str(DEFAULT_MAX_BODY_B
 USERS_DIR.mkdir(parents=True, exist_ok=True)
 
 
+@dataclass
+class UploadedFile:
+    field_name: str
+    filename: str
+    content: bytes
+
+
+def _parse_multipart_form(headers, body: bytes) -> tuple[dict[str, list[str]], list[UploadedFile]]:
+    content_type = headers.get("Content-Type", "")
+    if "multipart/form-data" not in content_type.lower():
+        raise ValueError("Content-Type must be multipart/form-data.")
+    raw = (
+        f"Content-Type: {content_type}\r\n"
+        "MIME-Version: 1.0\r\n"
+        "\r\n"
+    ).encode("utf-8") + body
+    message = BytesParser(policy=policy.default).parsebytes(raw)
+    if not message.is_multipart():
+        raise ValueError("Invalid multipart upload.")
+
+    fields: dict[str, list[str]] = {}
+    files: list[UploadedFile] = []
+    for part in message.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        if not name:
+            continue
+        filename = part.get_filename()
+        payload = part.get_payload(decode=True) or b""
+        if filename:
+            files.append(
+                UploadedFile(
+                    field_name=str(name),
+                    filename=Path(filename).name,
+                    content=payload,
+                )
+            )
+        else:
+            charset = part.get_content_charset() or "utf-8"
+            fields.setdefault(str(name), []).append(
+                payload.decode(charset, errors="replace")
+            )
+    return fields, files
+
+
 class AgentService:
     """Owns the async agent runtime behind the synchronous stdlib HTTP server."""
 
@@ -91,7 +137,7 @@ class AgentService:
         self._ready = threading.Event()
         self._start_lock = threading.Lock()
         self._start_error: BaseException | None = None
-        self._turn_lock: asyncio.Lock | None = None
+        self._session_locks: dict[str, asyncio.Lock] | None = None
         self._pending: dict[str, asyncio.Future[str]] = {}
 
     def ensure_started(self) -> None:
@@ -108,8 +154,11 @@ class AgentService:
                 )
                 self._thread.start()
 
-        if not self._ready.wait(timeout=15):
-            raise RuntimeError("Agent runtime did not start within 15 seconds.")
+        startup_timeout = _env_int("AGENT_RUNTIME_STARTUP_TIMEOUT_SECONDS", 15)
+        if not self._ready.wait(timeout=startup_timeout):
+            raise RuntimeError(
+                f"Agent runtime did not start within {startup_timeout} seconds."
+            )
         if self._start_error is not None:
             raise RuntimeError(_friendly_runtime_error(self._start_error)) from self._start_error
 
@@ -155,6 +204,7 @@ class AgentService:
                 user_role=user_role,
                 workspace_root=workspace_root,
                 on_text=on_text,
+                reply_timeout=_env_int("WEB_AGENT_REPLY_TIMEOUT_SECONDS", timeout),
             ),
             self._loop,
         )
@@ -201,7 +251,7 @@ class AgentService:
         from runtime.bootstrap import build_runtime
 
         self._runtime = build_runtime()
-        self._turn_lock = asyncio.Lock()
+        self._session_locks = {}
         self._runtime.bus.subscribe_outbound("web", self._handle_outbound)
         self._runtime.start()
 
@@ -227,13 +277,15 @@ class AgentService:
         user_role: str,
         workspace_root: str | None = None,
         on_text: Callable[[str], None] | None = None,
+        reply_timeout: int = 180,
     ) -> str:
-        if self._runtime is None or self._turn_lock is None or self._loop is None:
+        if self._runtime is None or self._session_locks is None or self._loop is None:
             raise RuntimeError("Agent runtime is not started.")
 
-        async with self._turn_lock:
+        scoped_chat_id = web_chat_id(user_id, session_id)
+        session_key = f"web:{scoped_chat_id}"
+        async with self._lock_for_session(session_key):
             reply_future: asyncio.Future[str] = self._loop.create_future()
-            scoped_chat_id = web_chat_id(user_id, session_id)
             self._pending[scoped_chat_id] = reply_future
             metadata = {
                 "user_id": normalize_user_id(user_id),
@@ -242,26 +294,38 @@ class AgentService:
             if workspace_root:
                 metadata["workspace_root"] = str(workspace_root)
             try:
-                await self._runtime.submit_user_message(
+                await self._runtime.run_message(
                     content=content,
                     channel="web",
                     chat_id=scoped_chat_id,
                     metadata=metadata,
+                    on_text=on_text,
                 )
-                await self._runtime.run_once(on_text=on_text)
-                return await asyncio.wait_for(reply_future, timeout=10)
+                return await asyncio.wait_for(
+                    reply_future,
+                    timeout=max(1, int(reply_timeout)),
+                )
             finally:
                 self._pending.pop(scoped_chat_id, None)
 
     async def _delete_session_async(self, session_id: str) -> bool:
-        if self._runtime is None or self._turn_lock is None:
+        if self._runtime is None or self._session_locks is None:
             raise RuntimeError("Agent runtime is not started.")
 
-        async with self._turn_lock:
+        async with self._lock_for_session(session_id):
             sessions = getattr(getattr(self._runtime, "loop", None), "sessions", None)
             if sessions is None:
                 raise RuntimeError("Agent session manager is not available.")
             return sessions.delete(session_id)
+
+    def _lock_for_session(self, session_key: str) -> asyncio.Lock:
+        if self._session_locks is None:
+            raise RuntimeError("Agent runtime is not started.")
+        lock = self._session_locks.get(session_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._session_locks[session_key] = lock
+        return lock
 
 
 def _friendly_runtime_error(exc: BaseException) -> str:
@@ -275,7 +339,7 @@ def _friendly_runtime_error(exc: BaseException) -> str:
 def read_sessions(user_id: str = DEFAULT_USER_ID) -> list[dict[str, Any]]:
     from sessions.session_store import SessionStore
 
-    store = SessionStore(SESSIONS_DB)
+    store = SessionStore(_sessions_store_path())
     try:
         rows = store.list_sessions()
     finally:
@@ -301,7 +365,7 @@ def read_sessions(user_id: str = DEFAULT_USER_ID) -> list[dict[str, Any]]:
 def _delete_stored_session(session_id: str) -> bool:
     from sessions.session_store import SessionStore
 
-    store = SessionStore(SESSIONS_DB)
+    store = SessionStore(_sessions_store_path())
     try:
         return store.delete_session(session_id)
     finally:
@@ -338,7 +402,7 @@ def read_session(
     from sessions.session_store import SessionStore
 
     storage_id = _web_storage_id(session_id, user_id)
-    store = SessionStore(SESSIONS_DB)
+    store = SessionStore(_sessions_store_path())
     try:
         session = store.load_session(storage_id)
     finally:
@@ -360,6 +424,16 @@ def read_session(
     session["can_chat"] = True
     session["messages"] = [_web_message(message) for message in session["messages"]]
     return session
+
+
+def _sessions_store_path() -> Path | None:
+    default_path = ROOT / ".sessions" / "sessions.db"
+    has_database_env = bool(
+        os.getenv("SESSION_DATABASE_URL") or os.getenv("DATABASE_URL")
+    )
+    if Path(SESSIONS_DB) == default_path and has_database_env:
+        return None
+    return SESSIONS_DB
 
 
 def _web_message(message: dict[str, Any]) -> dict[str, Any]:
@@ -576,7 +650,7 @@ def auth_credentials() -> tuple[str, str] | None:
 
 
 def web_auth_store() -> WebAuthStore:
-    return WebAuthStore(ROOT / ".users" / "auth.db")
+    return WebAuthStore(None)
 
 
 def sync_environment_auth_users(store: WebAuthStore) -> None:
@@ -1272,33 +1346,20 @@ class RequestHandler(BaseHTTPRequestHandler):
             if length > MAX_BODY_BYTES:
                 self._send_json({"error": "Upload is too large"}, status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
                 return
-            form = cgi.FieldStorage(
-                fp=self.rfile,
-                headers=self.headers,
-                environ={
-                    "REQUEST_METHOD": "POST",
-                    "CONTENT_TYPE": self.headers.get("Content-Type", ""),
-                    "CONTENT_LENGTH": str(length),
-                },
-            )
-            target_dir = _safe_storage_path(form.getfirst("path", ""), user_id=user_id)
+            fields, files = _parse_multipart_form(self.headers, self.rfile.read(length))
+            target_dir = _safe_storage_path((fields.get("path") or [""])[0], user_id=user_id)
             target_dir.mkdir(parents=True, exist_ok=True)
             if not target_dir.is_dir():
                 self._send_json({"error": "Target path is not a directory"}, status=HTTPStatus.BAD_REQUEST)
                 return
-            files = form["file"] if "file" in form else []
-            if not isinstance(files, list):
-                files = [files]
             saved = []
             for item in files:
-                if not getattr(item, "filename", ""):
+                if item.field_name != "file" or not item.filename:
                     continue
-                filename = Path(item.filename).name
-                dest = (target_dir / filename).resolve()
+                dest = (target_dir / item.filename).resolve()
                 if dest != storage_dir and not dest.is_relative_to(storage_dir):
                     raise ValueError("Path escapes storage.")
-                with dest.open("wb") as handle:
-                    shutil.copyfileobj(item.file, handle)
+                dest.write_bytes(item.content)
                 saved.append(_entry_for(dest, user_id=user_id))
             self._send_json({
                 "saved": saved,
@@ -1590,6 +1651,16 @@ def build_handler(agent_service: AgentService):
 
     BoundRequestHandler.agent_service = agent_service
     return BoundRequestHandler
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return int(default)
+    try:
+        return int(value)
+    except ValueError:
+        return int(default)
 
 
 def main() -> None:

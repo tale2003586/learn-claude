@@ -7,5 +7,5 @@ class TaskMemoryLifecycle(MemoryLifecycle):
     def _extract_explicit_memory(self, text: str) -> str:
         return ""
 
-    def _extract_candidate(self, text: str) -> str:
-        return ""
+    def _candidate_memory_enabled(self) -> bool:
+        return False

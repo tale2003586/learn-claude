@@ -33,12 +33,14 @@ class ReflectionAgent:
         provider,
         model: str,
         max_tokens: int = 500,
-        min_reasoning_steps: int = 6,
+        min_reasoning_steps: int = 10,
+        reflection_interval: int = 5,
     ) -> None:
         self.provider = provider
         self.model = model
         self.max_tokens = max(1, int(max_tokens))
         self.min_reasoning_steps = max(1, int(min_reasoning_steps))
+        self.reflection_interval = max(1, int(reflection_interval))
 
     def should_reflect(
         self,
@@ -55,7 +57,9 @@ class ReflectionAgent:
             return True
         if any(item.get("status") != "success" for item in execution.tool_results):
             return True
-        return reasoning_steps >= self.min_reasoning_steps
+        if reasoning_steps < self.min_reasoning_steps:
+            return False
+        return (reasoning_steps - self.min_reasoning_steps) % self.reflection_interval == 0
 
     def reflect(
         self,

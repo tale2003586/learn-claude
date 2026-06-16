@@ -67,6 +67,22 @@ class ModelPoolEnvTests(unittest.TestCase):
 
         self.assertEqual("responses", pool.profile_for("chat").wire_api)
 
+    def test_gemini_provider_uses_openai_compatibility_defaults(self) -> None:
+        env = {
+            "LLM_PROVIDER": "gemini",
+            "GEMINI_API_KEY": "gemini-key",
+        }
+
+        pool = build_model_pool_from_env(env)
+
+        self.assertEqual("gemini", pool.primary_profile_name("chat"))
+        self.assertEqual("gemini", pool.profile_for("chat").provider)
+        self.assertEqual(
+            "https://generativelanguage.googleapis.com/v1beta/openai/",
+            pool.profile_for("chat").base_url,
+        )
+        self.assertEqual("gemini-3.5-flash", pool.model_for("chat"))
+
     def test_provider_json_supports_responses_wire_api(self) -> None:
         env = {
             "LLM_PROVIDER": "relay",

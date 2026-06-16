@@ -102,6 +102,8 @@ def workspace_root_for_session(session=None) -> Path:
 
 
 def safe_workspace_path(path: str, *, session=None) -> Path:
+    if session is None:
+        raise ValueError("safe_workspace_path requires a session.")
     root = workspace_root_for_session(session).resolve()
     relative = Path(str(path or "").strip())
     if relative.is_absolute() or ".." in relative.parts:

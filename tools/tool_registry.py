@@ -30,6 +30,8 @@ SESSION_SCOPED_TOOLS = {
     "sandbox_read_file",
     "sandbox_write_file",
     "publish_artifact",
+    "task",
+    "parallel_tasks",
 }
 
 
@@ -367,6 +369,8 @@ def _modes_for_tool(name: str) -> set[str]:
         "background_run",
         "check_background",
         "compact",
+        "task",
+        "parallel_tasks",
         "spawn_teammate",
         "list_teammates",
         "broadcast",

@@ -159,10 +159,11 @@ def run_swebench_instance(
     )
     _emit(progress, "workspace_prepared", {"workspace": str(workspace)})
 
-    from config import MODEL_POOL
+    from runtime.bootstrap import get_model_pool
 
-    provider = MODEL_POOL.routed_provider("coding")
-    model = model_name or MODEL_POOL.model_for("coding")
+    model_pool = get_model_pool()
+    provider = model_pool.routed_provider("coding")
+    model = model_name or model_pool.model_for("coding")
     trace_store = TraceStore(eval_dir / "runs")
     sessions = SessionManager(eval_dir / "sessions" / f"{instance.instance_id}.db")
     pipeline = Pipeline(

@@ -81,8 +81,9 @@ _init_git_repo(workspace)
 `--runner real` 会使用：
 
 ```python
-MODEL_POOL.routed_provider("coding")
-MODEL_POOL.model_for("coding")
+model_pool = get_model_pool()
+model_pool.routed_provider("coding")
+model_pool.model_for("coding")
 ```
 
 这会把 benchmark 接到真实模型路由。
@@ -94,7 +95,7 @@ real runner 更适合评估模型和 prompt/profile 的能力，但它有波动�
 每条任务都会创建一套隔离 runtime 组件：
 
 - `TraceStore(eval_dir / "runs")`
-- `SessionManager(eval_dir / "sessions" / f"{task.id}.db")`
+- task scoped `SessionManager`
 - `Pipeline(...)`
 - `TaskSessionRunner(...)`
 - `WorkspaceResolver(allowed_roots=[workspaces_root], default_workspace=workspace)`

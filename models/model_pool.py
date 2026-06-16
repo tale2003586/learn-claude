@@ -26,6 +26,11 @@ DEFAULT_PROVIDER_SETTINGS = {
         "model": "gpt-4.1-mini",
         "max_tokens_param": "max_tokens",
     },
+    "gemini": {
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "model": "gemini-3.5-flash",
+        "max_tokens_param": "max_tokens",
+    },
 }
 
 PURPOSE_ALIASES = {

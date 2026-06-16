@@ -8,19 +8,27 @@ from datetime import datetime
 
 from runtime.trace.events import RUN_STARTED, TraceEvent
 from config import WORKDIR
+from runtime.trace.index_store import TraceIndexStore, trace_index_enabled
 from runtime.trace.run_state import RunState, now_iso
+from runtime.trace.summary import write_trace_summary
 
 
 class TraceStore:
     def __init__(self, root: str | Path | None = None) -> None:
         self.root = Path(root) if root is not None else WORKDIR / ".runs"
         self.root.mkdir(parents=True, exist_ok=True)
+        self.index_store = (
+            TraceIndexStore(default_root=self.root)
+            if trace_index_enabled()
+            else None
+        )
 
     def start_run(self, run_state: RunState) -> Path:
         run_dir = self.run_dir(run_state)
         run_dir.mkdir(parents=True, exist_ok=True)
         self.write_run_state(run_state)
         self.append_event(run_state, RUN_STARTED, run_state.to_dict())
+        self._index_run(run_state)
         return run_dir
 
     def append_event(
@@ -69,6 +77,8 @@ class TraceStore:
         }
         self._write_json_atomic(self.run_dir(run_state) / "report.json", payload)
         self.write_metrics(run_state)
+        write_trace_summary(self.run_dir(run_state))
+        self._index_run_from_artifacts(run_state, report or {})
 
     def write_metrics(self, run_state: RunState) -> None:
         self._write_json_atomic(
@@ -93,6 +103,32 @@ class TraceStore:
             encoding="utf-8",
         )
         os.replace(tmp_path, path)
+
+    def _index_run(self, run_state: RunState) -> None:
+        if self.index_store is None:
+            return
+        self.index_store.upsert_run(run_state, run_dir=self.run_dir(run_state))
+
+    def _index_run_from_artifacts(
+        self,
+        run_state: RunState,
+        report: dict[str, Any],
+    ) -> None:
+        if self.index_store is None:
+            return
+        run_dir = self.run_dir(run_state)
+        metrics = _read_json(run_dir / "metrics.json")
+        summary = _read_json(run_dir / "trace_summary.json")
+        self.index_store.upsert_run(
+            run_state,
+            run_dir=run_dir,
+            report=report,
+            summary=summary,
+            metrics=metrics,
+        )
+        execution_path = summary.get("execution_path")
+        if isinstance(execution_path, list):
+            self.index_store.replace_steps(run_state.run_id, execution_path)
 
     def _metrics_for(self, run_state: RunState) -> dict[str, Any]:
         metrics = {
@@ -227,6 +263,16 @@ def _duration_ms(started_at: str | None, finished_at: str | None) -> float | Non
     except ValueError:
         return None
     return round((finished - started).total_seconds() * 1000, 3)
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
 
 
 def _json_safe(value: Any) -> Any:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -17,8 +18,9 @@ def verify_task(
 
     command = str(expected.get("must_pass_command") or "").strip()
     if command:
+        executed_command = _portable_python_command(command)
         result = subprocess.run(
-            command,
+            executed_command,
             cwd=workspace,
             shell=True,
             capture_output=True,
@@ -29,6 +31,7 @@ def verify_task(
             "name": "must_pass_command",
             "passed": result.returncode == 0,
             "command": command,
+            "executed_command": executed_command,
             "stdout": result.stdout[-4000:],
             "stderr": result.stderr[-4000:],
         })
@@ -119,6 +122,15 @@ def _load_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _portable_python_command(command: str) -> str:
+    stripped = str(command or "").strip()
+    if stripped == "python":
+        return sys.executable
+    if stripped.startswith("python "):
+        return sys.executable + stripped[len("python"):]
+    return stripped
 
 
 def _trace_events(path: Path) -> list[dict[str, Any]]:

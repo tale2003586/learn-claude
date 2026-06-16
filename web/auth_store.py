@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
-import sqlite3
 import threading
 from contextlib import closing
 from dataclasses import dataclass
@@ -11,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Mapping
 
+from runtime.db import connect, is_integrity_error, resolve_database_config, sql
 from user_scope import normalize_user_id, normalize_user_role
 
 
@@ -41,25 +41,30 @@ class EnvironmentUser:
 
 
 class WebAuthStore:
-    """SQLite-backed Web users and opaque browser sessions."""
+    """Web users and opaque browser sessions."""
 
-    def __init__(self, db_path: str | Path) -> None:
-        self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+    def __init__(self, db_path: str | Path | None) -> None:
+        self.config = resolve_database_config(
+            db_path,
+            default_sqlite_path=Path.cwd() / ".users" / "auth.db",
+            env_names=("WEB_AUTH_DATABASE_URL", "DATABASE_URL"),
+        )
+        self.db_path = self.config.sqlite_path
         self._lock = threading.Lock()
         self._init_schema()
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path, timeout=10)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
+    def _connect(self):
+        conn = connect(self.config)
+        if not self.config.is_postgres:
+            conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
     def _init_schema(self) -> None:
         with self._lock, closing(self._connect()) as conn:
-            conn.execute("PRAGMA journal_mode = WAL")
+            if not self.config.is_postgres:
+                conn.execute("PRAGMA journal_mode = WAL")
             conn.execute(
-                """
+                sql(self.config, """
                 CREATE TABLE IF NOT EXISTS web_users (
                     user_id       TEXT PRIMARY KEY,
                     password_hash TEXT NOT NULL,
@@ -69,10 +74,10 @@ class WebAuthStore:
                     created_at    TEXT NOT NULL,
                     updated_at    TEXT NOT NULL
                 )
-                """
+                """)
             )
             conn.execute(
-                """
+                sql(self.config, """
                 CREATE TABLE IF NOT EXISTS web_auth_sessions (
                     token_hash TEXT PRIMARY KEY,
                     user_id    TEXT NOT NULL,
@@ -81,13 +86,13 @@ class WebAuthStore:
                     FOREIGN KEY (user_id) REFERENCES web_users(user_id)
                         ON DELETE CASCADE
                 )
-                """
+                """)
             )
             conn.execute(
-                """
+                sql(self.config, """
                 CREATE INDEX IF NOT EXISTS idx_web_auth_sessions_expiry
                 ON web_auth_sessions(expires_at)
-                """
+                """)
             )
             conn.commit()
 
@@ -101,11 +106,11 @@ class WebAuthStore:
             password = _validated_password(user.password)
             with self._lock, closing(self._connect()) as conn:
                 existing = conn.execute(
-                    """
+                    sql(self.config, """
                     SELECT password_hash, salt, role, source
                     FROM web_users
                     WHERE user_id = ?
-                    """,
+                    """),
                     (user_id,),
                 ).fetchone()
                 if (
@@ -122,7 +127,7 @@ class WebAuthStore:
                 salt, password_hash = _hash_password(password)
                 now = _now_iso()
                 conn.execute(
-                    """
+                    sql(self.config, """
                     INSERT INTO web_users (
                         user_id, password_hash, salt, role, source, created_at, updated_at
                     ) VALUES (?, ?, ?, ?, 'environment', ?, ?)
@@ -132,7 +137,7 @@ class WebAuthStore:
                         role = excluded.role,
                         source = 'environment',
                         updated_at = excluded.updated_at
-                    """,
+                    """),
                     (user_id, password_hash, salt, role, now, now),
                 )
                 conn.commit()
@@ -145,16 +150,19 @@ class WebAuthStore:
         with self._lock, closing(self._connect()) as conn:
             try:
                 conn.execute(
-                    """
+                    sql(self.config, """
                     INSERT INTO web_users (
                         user_id, password_hash, salt, role, source, created_at, updated_at
                     ) VALUES (?, ?, ?, 'user', 'registration', ?, ?)
-                    """,
+                    """),
                     (normalized_user_id, password_hash, salt, now, now),
                 )
                 conn.commit()
-            except sqlite3.IntegrityError as exc:
-                raise ValueError("This username is already registered.") from exc
+            except Exception as exc:
+                if is_integrity_error(exc):
+                    conn.rollback()
+                    raise ValueError("This username is already registered.") from exc
+                raise
         return AuthenticatedUser(user_id=normalized_user_id, role="user")
 
     def authenticate(
@@ -169,11 +177,11 @@ class WebAuthStore:
             return None
         with self._lock, closing(self._connect()) as conn:
             row = conn.execute(
-                """
+                sql(self.config, """
                 SELECT user_id, password_hash, salt, role
                 FROM web_users
                 WHERE user_id = ?
-                """,
+                """),
                 (normalized_user_id,),
             ).fetchone()
         if row is None:
@@ -201,15 +209,15 @@ class WebAuthStore:
         expires_at = now + timedelta(hours=max(1, int(ttl_hours)))
         with self._lock, closing(self._connect()) as conn:
             conn.execute(
-                "DELETE FROM web_auth_sessions WHERE expires_at <= ?",
+                sql(self.config, "DELETE FROM web_auth_sessions WHERE expires_at <= ?"),
                 (now.isoformat(),),
             )
             conn.execute(
-                """
+                sql(self.config, """
                 INSERT INTO web_auth_sessions (
                     token_hash, user_id, created_at, expires_at
                 ) VALUES (?, ?, ?, ?)
-                """,
+                """),
                 (token_hash, user.user_id, now.isoformat(), expires_at.isoformat()),
             )
             conn.commit()
@@ -222,19 +230,19 @@ class WebAuthStore:
         now = _now_iso()
         with self._lock, closing(self._connect()) as conn:
             row = conn.execute(
-                """
+                sql(self.config, """
                 SELECT u.user_id, u.role, s.expires_at
                 FROM web_auth_sessions AS s
                 JOIN web_users AS u ON u.user_id = s.user_id
                 WHERE s.token_hash = ?
-                """,
+                """),
                 (token_hash,),
             ).fetchone()
             if row is None:
                 return None
             if row["expires_at"] <= now:
                 conn.execute(
-                    "DELETE FROM web_auth_sessions WHERE token_hash = ?",
+                    sql(self.config, "DELETE FROM web_auth_sessions WHERE token_hash = ?"),
                     (token_hash,),
                 )
                 conn.commit()
@@ -249,7 +257,7 @@ class WebAuthStore:
             return
         with self._lock, closing(self._connect()) as conn:
             conn.execute(
-                "DELETE FROM web_auth_sessions WHERE token_hash = ?",
+                sql(self.config, "DELETE FROM web_auth_sessions WHERE token_hash = ?"),
                 (_token_hash(token),),
             )
             conn.commit()

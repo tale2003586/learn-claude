@@ -2,7 +2,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Callable
 
-from runtime.compact import auto_compact, estimate_tokens
+from runtime.token_estimator import emergency_trim, estimate_tokens, safe_context_limit
 from runtime.trace.events import (
     CONTEXT_BUILD_COMPLETED,
     CONTEXT_BUILD_STARTED,
@@ -300,11 +300,10 @@ class ReasoningLoop:
                 return
 
             if execution.manual_compact:
-                self._trace(trace_store, run_state, "manual_compact_applied", {
+                self._trace(trace_store, run_state, "manual_compact_requested", {
                     "step": reasoning_steps,
+                    "handled_by": "context_budget",
                 })
-                session.messages[:] = auto_compact(session.messages)
-                session.mark_compacted()
 
     def _reasoning_step(
         self,
@@ -325,7 +324,7 @@ class ReasoningLoop:
             method = provider.stream_chat
         tools = self.tools.schemas_for_turn(session, profile.tool_mode)
         context_messages, dropped_messages = _sanitize_context_messages(context.messages)
-        context_summary = _context_summary(context_messages)
+        context_summary = _context_summary(context_messages, provider=provider)
         if dropped_messages:
             self._trace(
                 trace_store,
@@ -335,6 +334,32 @@ class ReasoningLoop:
                     "dropped_count": len(dropped_messages),
                     "dropped_messages": dropped_messages,
                     "context_summary": context_summary,
+                },
+                step=reasoning_step,
+                span_id=_context_span_id(run_state, reasoning_step),
+                parent_span_id=_step_span_id(run_state, reasoning_step),
+            )
+        safe_limit = safe_context_limit(provider)
+        estimated_tokens = estimate_tokens(context_messages, provider=provider)
+        if estimated_tokens > safe_limit:
+            before_message_count = len(context_messages)
+            before_tokens = estimated_tokens
+            context_messages = emergency_trim(
+                context_messages,
+                max_tokens=safe_limit,
+                provider=provider,
+            )
+            context_summary = _context_summary(context_messages, provider=provider)
+            self._trace(
+                trace_store,
+                run_state,
+                "context_emergency_trim",
+                {
+                    "before_message_count": before_message_count,
+                    "after_message_count": len(context_messages),
+                    "before_estimated_tokens": before_tokens,
+                    "after_estimated_tokens": context_summary["estimated_tokens"],
+                    "safe_limit_tokens": safe_limit,
                 },
                 step=reasoning_step,
                 span_id=_context_span_id(run_state, reasoning_step),
@@ -749,10 +774,21 @@ class ReasoningLoop:
             session.messages.append({
                 "role": "user",
                 "content": (
-                    "<reflection-instruction>\n"
+                    f"<reflection-instruction critical=\"true\" action=\"{action}\" reason=\"{_xml_escape(reason)}\">\n"
                     f"{instruction}\n"
                     "</reflection-instruction>"
                 ),
+                "metadata": {
+                    "kind": "reflection_instruction",
+                    "critical": True,
+                    "action": action,
+                    "reason": reason,
+                },
+            })
+            self._trace(trace_store, run_state, "reflection_revise", {
+                "action": action,
+                "reason": reason,
+                "instruction_preview": event_preview(instruction),
             })
         return False
 
@@ -801,7 +837,7 @@ def _elapsed_ms(started: float) -> float:
     return round((time.perf_counter() - started) * 1000, 3)
 
 
-def _context_summary(messages: list[dict]) -> dict:
+def _context_summary(messages: list[dict], *, provider=None) -> dict:
     by_role: dict[str, int] = {}
     empty_assistant_messages = 0
     tool_result_messages = 0
@@ -821,7 +857,7 @@ def _context_summary(messages: list[dict]) -> dict:
         "user_messages": by_role.get("user", 0),
         "tool_messages": tool_result_messages,
         "empty_assistant_messages": empty_assistant_messages,
-        "estimated_tokens": estimate_tokens(messages or []),
+        "estimated_tokens": estimate_tokens(messages or [], provider=provider),
     }
 
 
@@ -835,19 +871,139 @@ def _context_report_payload(report) -> dict:
     return getattr(report, "__dict__", {}) or {}
 
 
+def _xml_escape(value: str) -> str:
+    return (
+        str(value or "")
+        .replace("&", "&amp;")
+        .replace('"', "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
 def _sanitize_context_messages(messages: list[dict]) -> tuple[list[dict], list[dict]]:
     sanitized = []
     dropped = []
-    for index, message in enumerate(messages or []):
+    items = list(messages or [])
+    index = 0
+    while index < len(items):
+        message = items[index]
         if isinstance(message, dict) and _is_empty_assistant_message(message):
             dropped.append({
                 "index": index,
                 "role": "assistant",
                 "reason": "empty_assistant_message",
             })
+            index += 1
+            continue
+        if isinstance(message, dict) and message.get("tool_calls"):
+            replacement, next_index, drop_items = _sanitize_tool_call_group(items, index)
+            if drop_items:
+                dropped.extend(drop_items)
+                sanitized.extend(replacement)
+                index = next_index
+                continue
+            sanitized.extend(replacement)
+            index = next_index
+            continue
+        if isinstance(message, dict) and str(message.get("role") or "") == "tool":
+            dropped.append({
+                "index": index,
+                "role": "tool",
+                "reason": "orphan_tool_result",
+                "tool_call_id": message.get("tool_call_id"),
+            })
+            sanitized.append(_summarize_orphan_tool_result(message))
+            index += 1
             continue
         sanitized.append(message)
+        index += 1
     return sanitized, dropped
+
+
+def _sanitize_tool_call_group(messages: list[dict], index: int) -> tuple[list[dict], int, list[dict]]:
+    message = messages[index]
+    expected_ids = _tool_call_ids(message.get("tool_calls") or [])
+    if not expected_ids:
+        return [message], index + 1, []
+
+    tool_messages = []
+    cursor = index + 1
+    seen_ids: set[str] = set()
+    while cursor < len(messages):
+        candidate = messages[cursor]
+        if not isinstance(candidate, dict) or str(candidate.get("role") or "") != "tool":
+            break
+        tool_call_id = str(candidate.get("tool_call_id") or "")
+        if tool_call_id not in expected_ids:
+            break
+        tool_messages.append(candidate)
+        seen_ids.add(tool_call_id)
+        cursor += 1
+        if seen_ids >= expected_ids:
+            break
+
+    if seen_ids == expected_ids:
+        return [message, *tool_messages], cursor, []
+
+    replacement = _summarize_invalid_tool_call_group(message, tool_messages, expected_ids, seen_ids)
+    dropped = [{
+        "index": index,
+        "role": "assistant",
+        "reason": "incomplete_tool_call_group",
+        "expected_tool_call_ids": sorted(expected_ids),
+        "seen_tool_call_ids": sorted(seen_ids),
+    }]
+    for offset, tool_message in enumerate(tool_messages, start=1):
+        dropped.append({
+            "index": index + offset,
+            "role": "tool",
+            "reason": "tool_result_belongs_to_incomplete_tool_call_group",
+            "tool_call_id": tool_message.get("tool_call_id"),
+        })
+    return [replacement], cursor, dropped
+
+
+def _summarize_invalid_tool_call_group(
+    assistant_message: dict,
+    tool_messages: list[dict],
+    expected_ids: set[str],
+    seen_ids: set[str],
+) -> dict:
+    tool_names = _tool_names_from_calls(assistant_message.get("tool_calls") or [])
+    lines = [
+        "[Context sanitizer note: an incomplete assistant tool-call group was converted to plain text before the model call.]",
+        f"Expected tool_call_ids: {', '.join(sorted(expected_ids))}",
+        f"Available tool_call_ids: {', '.join(sorted(seen_ids)) or '(none)'}",
+    ]
+    if tool_names:
+        lines.append(f"Tool calls: {', '.join(tool_names)}")
+    content = str(assistant_message.get("content") or "").strip()
+    if content:
+        lines.append(f"Assistant content: {content[:500]}")
+    for tool_message in tool_messages:
+        tool_text = str(tool_message.get("content") or "").replace("\n", " ")
+        if len(tool_text) > 300:
+            tool_text = tool_text[:297].rstrip() + "..."
+        lines.append(f"Tool result {tool_message.get('tool_call_id')}: {tool_text}")
+    return {
+        "role": "user",
+        "content": "\n".join(lines),
+    }
+
+
+def _summarize_orphan_tool_result(message: dict) -> dict:
+    content = str(message.get("content") or "").replace("\n", " ")
+    if len(content) > 500:
+        content = content[:497].rstrip() + "..."
+    return {
+        "role": "user",
+        "content": (
+            "[Context sanitizer note: an orphan tool result was converted to plain text before the model call.]\n"
+            f"tool_call_id={message.get('tool_call_id')}\n"
+            f"{content}"
+        ),
+    }
 
 
 def _is_empty_assistant_message(message: dict) -> bool:
@@ -863,6 +1019,26 @@ def _is_empty_assistant_message(message: dict) -> bool:
     if isinstance(content, list):
         return len(content) == 0
     return False
+
+
+def _tool_call_ids(tool_calls: list) -> set[str]:
+    ids = set()
+    for call in tool_calls or []:
+        if isinstance(call, dict) and call.get("id"):
+            ids.add(str(call.get("id")))
+    return ids
+
+
+def _tool_names_from_calls(tool_calls: list) -> list[str]:
+    names = []
+    for call in tool_calls or []:
+        if not isinstance(call, dict):
+            continue
+        function = call.get("function") or {}
+        name = str(function.get("name") or call.get("name") or "").strip()
+        if name:
+            names.append(name)
+    return names
 
 
 def _is_empty_response(response) -> bool:

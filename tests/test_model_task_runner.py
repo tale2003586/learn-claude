@@ -16,6 +16,11 @@ class RecordingProvider:
         return LLMResponse(content=self.content)
 
 
+class FailingProvider:
+    def chat(self, **kwargs):
+        raise RuntimeError("model unavailable")
+
+
 class FakeModelPool:
     def __init__(self, provider):
         self.provider = provider
@@ -75,6 +80,24 @@ class ModelTaskRunnerTests(unittest.TestCase):
         self.assertEqual("compact memory summary", summary)
         self.assertEqual("summary-model", provider.calls[0]["model"])
         self.assertEqual(77, provider.calls[0]["max_tokens"])
+
+    def test_runner_calls_on_error_before_reraising(self):
+        errors = []
+        runner = ModelTaskRunner(
+            provider=FailingProvider(),
+            model="summary-model",
+            on_error=lambda exc, spec: errors.append((type(exc).__name__, spec.name)),
+        )
+        spec = AgentSpec(
+            name="candidate_extractor",
+            profile=None,
+            model_purpose="summary",
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "model unavailable"):
+            runner.run(spec=spec, messages=[{"role": "user", "content": "x"}])
+
+        self.assertEqual([("RuntimeError", "candidate_extractor")], errors)
 
 
 if __name__ == "__main__":

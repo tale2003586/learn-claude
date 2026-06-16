@@ -1,5 +1,4 @@
 import json
-import sqlite3
 import threading
 from contextlib import closing
 from dataclasses import asdict, dataclass, field
@@ -8,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from config import WORKDIR
+from runtime.db import connect, resolve_database_config, row_get, sql
 
 
 def _now_iso() -> str:
@@ -27,25 +27,32 @@ class ArchivedRecentTurn:
 
 
 class MemoryArchiveStore:
-    """SQLite archive for turns evicted from the rolling recent context."""
+    """Archive for turns evicted from the rolling recent context."""
 
-    def __init__(self, db_path: Path | None = None):
-        self.db_path = Path(db_path or WORKDIR / ".sessions" / "sessions.db")
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+    def __init__(self, db_path: Path | str | None = None):
+        self.config = resolve_database_config(
+            db_path,
+            default_sqlite_path=WORKDIR / ".sessions" / "memory_archive.db",
+            env_names=("MEMORY_ARCHIVE_DATABASE_URL", "SESSION_DATABASE_URL", "DATABASE_URL"),
+        )
+        self.db_path = self.config.sqlite_path
         self._lock = threading.Lock()
         self._init_schema()
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+    def _connect(self):
+        return connect(self.config)
 
     def _init_schema(self) -> None:
         with self._lock, closing(self._connect()) as conn:
+            id_column = (
+                "id BIGSERIAL PRIMARY KEY"
+                if self.config.is_postgres
+                else "id INTEGER PRIMARY KEY AUTOINCREMENT"
+            )
             conn.execute(
-                """
+                sql(self.config, f"""
                 CREATE TABLE IF NOT EXISTS memory_archive (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    {id_column},
                     session_id TEXT NOT NULL,
                     mode TEXT NOT NULL,
                     user_text TEXT NOT NULL,
@@ -53,15 +60,15 @@ class MemoryArchiveStore:
                     source_ref TEXT NOT NULL UNIQUE,
                     created_at TEXT NOT NULL,
                     archived_at TEXT NOT NULL,
-                    metadata TEXT NOT NULL DEFAULT '{}'
+                    metadata TEXT NOT NULL DEFAULT '{{}}'
                 )
-                """
+                """)
             )
             conn.execute(
-                """
+                sql(self.config, """
                 CREATE INDEX IF NOT EXISTS idx_memory_archive_session_created
                 ON memory_archive(session_id, created_at DESC)
-                """
+                """)
             )
             conn.commit()
 
@@ -71,8 +78,17 @@ class MemoryArchiveStore:
             payload["metadata"], ensure_ascii=False, sort_keys=True
         )
         with self._lock, closing(self._connect()) as conn:
-            cursor = conn.execute(
-                """
+            insert_values = (
+                payload["session_id"],
+                payload["mode"],
+                payload["user_text"],
+                payload["assistant_summary"],
+                payload["source_ref"],
+                payload["created_at"],
+                payload["archived_at"],
+                payload["metadata"],
+            )
+            insert_sql = """
                 INSERT OR IGNORE INTO memory_archive (
                     session_id,
                     mode,
@@ -83,17 +99,21 @@ class MemoryArchiveStore:
                     archived_at,
                     metadata
                 ) VALUES (
-                    :session_id,
-                    :mode,
-                    :user_text,
-                    :assistant_summary,
-                    :source_ref,
-                    :created_at,
-                    :archived_at,
-                    :metadata
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?
                 )
-                """,
-                payload,
+            """
+            if self.config.is_postgres:
+                insert_sql = insert_sql.replace("INSERT OR IGNORE", "INSERT").rstrip() + " ON CONFLICT (source_ref) DO NOTHING"
+            cursor = conn.execute(
+                sql(self.config, insert_sql),
+                insert_values,
             )
             conn.commit()
             return cursor.rowcount > 0
@@ -101,7 +121,7 @@ class MemoryArchiveStore:
     def list_recent(
         self, session_id: str | None = None, limit: int = 100
     ) -> list[dict[str, Any]]:
-        sql = """
+        query = """
             SELECT
                 id,
                 session_id,
@@ -116,17 +136,17 @@ class MemoryArchiveStore:
         """
         params: list[Any] = []
         if session_id:
-            sql += " WHERE session_id = ?"
+            query += " WHERE session_id = ?"
             params.append(session_id)
-        sql += " ORDER BY id DESC LIMIT ?"
+        query += " ORDER BY id DESC LIMIT ?"
         params.append(max(1, limit))
 
         with self._lock, closing(self._connect()) as conn:
-            rows = conn.execute(sql, params).fetchall()
+            rows = conn.execute(sql(self.config, query), params).fetchall()
         return [
             {
                 **dict(row),
-                "metadata": json.loads(row["metadata"] or "{}"),
+                "metadata": json.loads(row_get(row, "metadata", "{}") or "{}"),
             }
             for row in rows
         ]

@@ -43,3 +43,24 @@ class AppRuntime:
 
     async def run_once(self, on_text: Callable[[str], None] | None = None) -> None:
         await self.loop.run_once(on_text=on_text)
+
+    async def run_message(
+        self,
+        *,
+        content: str,
+        channel: str = "cli",
+        chat_id: str = "local",
+        sender: str = "user",
+        metadata: dict[str, Any] | None = None,
+        on_text: Callable[[str], None] | None = None,
+    ) -> None:
+        await self.loop.run_inbound(
+            InboundMessage(
+                channel=channel,
+                chat_id=chat_id,
+                sender=sender,
+                content=content,
+                metadata=metadata or {},
+            ),
+            on_text=on_text,
+        )

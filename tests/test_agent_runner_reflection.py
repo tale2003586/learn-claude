@@ -151,7 +151,8 @@ class AgentRunnerTests(unittest.TestCase):
         self.assertEqual(2, len(provider.calls))
         second_messages = provider.calls[1]["messages"]
         self.assertTrue(any(
-            "<reflection-instruction>" in str(message.get("content") or "")
+            "<reflection-instruction" in str(message.get("content") or "")
+            and 'critical="true"' in str(message.get("content") or "")
             for message in second_messages
         ))
         self.assertEqual(["should", "reflect"], [item[0] for item in reflection.calls])

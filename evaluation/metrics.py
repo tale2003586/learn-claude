@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections import Counter
 from statistics import mean
 
+from runtime.trace.failure import FailureCategory
+
 
 def summarize_rows(rows: list[dict]) -> dict:
     total = len(rows)
@@ -35,16 +37,16 @@ def summarize_rows(rows: list[dict]) -> dict:
 
 def failure_category(row: dict) -> str:
     if row.get("run_status") != "completed":
-        return "run_failed"
+        return FailureCategory.RUN_FAILED.value
     if not row.get("within_budget"):
-        return "budget_exceeded"
+        return FailureCategory.BUDGET_EXCEEDED.value
     if not row.get("verifier_passed"):
-        return "verifier_failed"
+        return FailureCategory.VERIFIER_ERROR.value
     if not row.get("workspace_diff_passed"):
-        return "workspace_diff_failed"
+        return FailureCategory.WORKSPACE_DIFF_FAILED.value
     if not row.get("trace_passed"):
-        return "trace_missing"
-    return "unknown"
+        return FailureCategory.TRACE_MISSING.value
+    return FailureCategory.UNKNOWN.value
 
 
 def _rate(value: int, total: int) -> float:

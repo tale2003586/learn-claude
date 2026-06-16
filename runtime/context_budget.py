@@ -14,6 +14,11 @@ class SectionBudgetRule:
     budget_chars: int
     floor_chars: int
     strategy: str
+    keep_head_turns: int = 0
+    keep_tail_turns: int = 0
+    summary_chars: int = 0
+    keep_recent_results: int = 5
+    preserve_tools: tuple[str, ...] = ("read_file", "git_diff", "git_status", "git_log")
 
 
 @dataclass(frozen=True)
@@ -43,7 +48,7 @@ class ContextBudgeter:
 
     @classmethod
     def from_env(cls) -> "ContextBudgeter":
-        enabled = _env_bool("CONTEXT_ENABLE_SECTION_BUDGET", default=False)
+        enabled = _env_bool("CONTEXT_ENABLE_SECTION_BUDGET", default=True)
         total_budget = _env_int("CONTEXT_BUDGET_CHARS", DEFAULT_TOTAL_BUDGET_CHARS)
         return cls(
             enabled=enabled,
@@ -63,15 +68,60 @@ class ContextBudgeter:
                 ),
                 "memory": SectionBudgetRule(
                     name="memory",
-                    budget_chars=_env_int("CONTEXT_MEMORY_BUDGET", 2500),
+                    budget_chars=_env_int("CONTEXT_MEMORY_BUDGET", 2000),
                     floor_chars=_env_int("CONTEXT_MEMORY_FLOOR", 500),
+                    strategy="head_tail",
+                ),
+                "retrieved_history": SectionBudgetRule(
+                    name="retrieved_history",
+                    budget_chars=_env_int_any(
+                        ["CONTEXT_RETRIEVED_HISTORY_BUDGET", "CONTEXT_RETRIEVED_MEMORY_BUDGET"],
+                        2500,
+                    ),
+                    floor_chars=_env_int_any(
+                        ["CONTEXT_RETRIEVED_HISTORY_FLOOR", "CONTEXT_RETRIEVED_MEMORY_FLOOR"],
+                        500,
+                    ),
+                    strategy="head_tail",
+                ),
+                "security_knowledge": SectionBudgetRule(
+                    name="security_knowledge",
+                    budget_chars=_env_int("CONTEXT_SECURITY_KNOWLEDGE_BUDGET", 3000),
+                    floor_chars=_env_int("CONTEXT_SECURITY_KNOWLEDGE_FLOOR", 800),
                     strategy="head_tail",
                 ),
                 "task_runtime_events": SectionBudgetRule(
                     name="task_runtime_events",
-                    budget_chars=_env_int("CONTEXT_TASK_RUNTIME_EVENTS_BUDGET", 2000),
+                    budget_chars=_env_int("CONTEXT_TASK_RUNTIME_EVENTS_BUDGET", 1500),
                     floor_chars=_env_int("CONTEXT_TASK_RUNTIME_EVENTS_FLOOR", 300),
                     strategy="tail",
+                ),
+                "conversation_history": SectionBudgetRule(
+                    name="conversation_history",
+                    budget_chars=_env_int("CONTEXT_CONVERSATION_HISTORY_BUDGET", 10000),
+                    floor_chars=_env_int("CONTEXT_CONVERSATION_HISTORY_FLOOR", 4000),
+                    strategy=os.getenv(
+                        "CONTEXT_CONVERSATION_HISTORY_STRATEGY",
+                        "summary_middle",
+                    ),
+                    keep_head_turns=_env_int("CONTEXT_HISTORY_KEEP_HEAD_TURNS", 3),
+                    keep_tail_turns=_env_int("CONTEXT_HISTORY_KEEP_TAIL_TURNS", 6),
+                    summary_chars=_env_int("CONTEXT_HISTORY_SUMMARY_MAX_CHARS", 3000),
+                ),
+                "active_turn": SectionBudgetRule(
+                    name="active_turn",
+                    budget_chars=_env_int("CONTEXT_ACTIVE_TURN_BUDGET", 8000),
+                    floor_chars=_env_int("CONTEXT_ACTIVE_TURN_FLOOR", 3000),
+                    strategy=os.getenv(
+                        "CONTEXT_ACTIVE_TURN_STRATEGY",
+                        "latest_tool_call",
+                    ),
+                    summary_chars=_env_int("CONTEXT_ACTIVE_TURN_SUMMARY_MAX_CHARS", 1800),
+                    keep_recent_results=_env_int("CONTEXT_ACTIVE_TURN_KEEP_RECENT_RESULTS", 5),
+                    preserve_tools=_env_list(
+                        "CONTEXT_ACTIVE_TURN_PRESERVE_TOOLS",
+                        ("read_file", "git_diff", "git_status", "git_log"),
+                    ),
                 ),
             },
         )
@@ -177,3 +227,21 @@ def _env_int(name: str, default: int) -> int:
         return int(value)
     except ValueError:
         return int(default)
+
+
+def _env_int_any(names: list[str], default: int) -> int:
+    for name in names:
+        value = os.getenv(name)
+        if value not in (None, ""):
+            try:
+                return int(value)
+            except ValueError:
+                return int(default)
+    return int(default)
+
+
+def _env_list(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return tuple(default)
+    return tuple(item.strip() for item in value.split(",") if item.strip())

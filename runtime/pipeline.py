@@ -1,12 +1,13 @@
 from coding_runtime.background_task import BG
-from runtime.compact import auto_compact, estimate_tokens, micro_compact
-from config import THRESHOLD
 from bus.team_bus import BUS
 from runtime.agent_runner import AgentRunner
 from runtime.agent_spec import AgentSpec
 from runtime.context import ContextBundle
 from runtime.reasoning_loop import DEFAULT_MAX_REASONING_STEPS
 from typing import Callable
+
+
+SECURITY_RAG_AUTO_CONTEXT_USED_KEY = "security_rag_auto_context_used"
 
 
 class Pipeline:
@@ -95,12 +96,21 @@ class Pipeline:
         run_state=None,
         trace_store=None,
     ) -> None:
+        active_turn_start_index = _last_user_message_index(session.messages)
         self._before_turn(session)
         self.agent_runner.run_turn(
             session=session,
             spec=self._agent_spec(session, profile),
-            build_context=self._before_reasoning,
-            after_turn=self._after_turn,
+            build_context=lambda session, profile: self._before_reasoning(
+                session,
+                profile,
+                active_turn_start_index=active_turn_start_index,
+            ),
+            after_turn=lambda session: self._after_turn(
+                session,
+                run_state=run_state,
+                trace_store=trace_store,
+            ),
             on_text=on_text,
             run_state=run_state,
             trace_store=trace_store,
@@ -108,19 +118,9 @@ class Pipeline:
 
     def _before_turn(self, session) -> None:
         self.agent_runner.reset_turn_state(session)
-        micro_compact(session.messages)
-        if estimate_tokens(session.messages) > THRESHOLD:
-            print("auto Compacting...")
-            session.messages[:] = auto_compact(session.messages)
-            session.mark_compacted()
+        session.metadata[SECURITY_RAG_AUTO_CONTEXT_USED_KEY] = False
 
-    def _before_reasoning(self, session, profile):
-        micro_compact(session.messages)
-        if estimate_tokens(session.messages) > THRESHOLD:
-            print("auto Compacting...")
-            session.messages[:] = auto_compact(session.messages)
-            session.mark_compacted()
-
+    def _before_reasoning(self, session, profile, *, active_turn_start_index=None):
         if self._should_include_task_runtime_events(session, profile):
             notifs = BG.drain_notifications()
             inbox = BUS.read_inbox("lead")
@@ -128,12 +128,19 @@ class Pipeline:
             notifs = []
             inbox = []
 
+        include_security_knowledge = not bool(
+            session.metadata.get(SECURITY_RAG_AUTO_CONTEXT_USED_KEY)
+        )
         context = self.agent_runner.context_builder.build(
             session=session,
             profile=profile,
             inbox=inbox,
             background_results=notifs,
+            active_turn_start_index=active_turn_start_index,
+            include_security_knowledge=include_security_knowledge,
         )
+        if _section_rendered(context, "security_knowledge"):
+            session.metadata[SECURITY_RAG_AUTO_CONTEXT_USED_KEY] = True
         return self._with_tool_catalog(context, session, profile)
 
     def _with_tool_catalog(self, context, session, profile):
@@ -141,7 +148,7 @@ class Pipeline:
         if not catalog:
             return context
         messages = list(getattr(context, "messages", []) or [])
-        messages.append({
+        messages.insert(_active_turn_insert_index(context, messages), {
             "role": "user",
             "content": catalog,
         })
@@ -174,9 +181,22 @@ class Pipeline:
             return "coding"
         return "chat"
 
-    def _after_turn(self, session) -> None:
+    def _after_turn(self, session, *, run_state=None, trace_store=None) -> None:
         if self.memory_lifecycle is not None:
-            self.memory_lifecycle.after_turn(session)
+            result = self.memory_lifecycle.after_turn(session)
+            if trace_store is not None and run_state is not None and result is not None:
+                for item in getattr(result, "trace_events", []) or []:
+                    event_name = item.get("event")
+                    payload = item.get("payload") or {}
+                    if event_name:
+                        trace_store.append_event(run_state, event_name, payload)
+                trace_store.append_event(
+                    run_state,
+                    "memory.lifecycle.completed",
+                    result.to_trace_payload()
+                    if hasattr(result, "to_trace_payload")
+                    else {},
+                )
         session.touch()
 
     def _should_include_task_runtime_events(self, session, profile) -> bool:
@@ -208,3 +228,49 @@ def message_text(message: dict) -> str:
                 parts.append(block.text)
         return "".join(parts)
     return ""
+
+
+def _last_user_message_index(messages: list) -> int | None:
+    for index in range(len(messages or []) - 1, -1, -1):
+        message = messages[index]
+        if isinstance(message, dict) and message.get("role") == "user":
+            return index
+    return None
+
+
+def _active_turn_insert_index(context, messages: list) -> int:
+    report = getattr(context, "report", None)
+    if report is None:
+        return len(messages)
+    try:
+        sections = report.to_dict().get("sections", {})
+    except AttributeError:
+        return len(messages)
+    active = sections.get("active_turn") or {}
+    metadata = active.get("metadata") or {}
+    try:
+        active_count = int(metadata.get("message_count") or 0)
+    except (TypeError, ValueError):
+        active_count = 0
+    try:
+        active_count = int(metadata.get("rendered_message_count") or active_count)
+    except (TypeError, ValueError):
+        pass
+    if active_count <= 0:
+        return len(messages)
+    return max(1, len(messages) - active_count)
+
+
+def _section_rendered(context, name: str) -> bool:
+    report = getattr(context, "report", None)
+    if report is None:
+        return False
+    try:
+        sections = report.to_dict().get("sections", {})
+    except AttributeError:
+        return False
+    section = sections.get(name) or {}
+    try:
+        return int(section.get("rendered_chars") or 0) > 0
+    except (TypeError, ValueError):
+        return False

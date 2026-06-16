@@ -1,23 +1,28 @@
 import json
-import sqlite3
 import threading
 from pathlib import Path
 from typing import Any
 
+from runtime.db import connect, execute_many, resolve_database_config, row_get, sql
+
 
 class SessionStore:
-    def __init__(self, db_path: str | Path) -> None:
-        self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
+    def __init__(self, db_path: str | Path | None) -> None:
+        self.config = resolve_database_config(
+            db_path,
+            default_sqlite_path=Path.cwd() / ".sessions" / "sessions.db",
+            env_names=("SESSION_DATABASE_URL", "DATABASE_URL"),
+        )
+        self.db_path = self.config.sqlite_path
+        self._conn = connect(self.config)
         self._lock = threading.Lock()
+        self.last_message_insert_count = 0
         self._init_schema()
 
     def _init_schema(self) -> None:
         with self._lock:
             self._conn.execute(
-                """
+                sql(self.config, """
                 CREATE TABLE IF NOT EXISTS sessions (
                     id             TEXT PRIMARY KEY,
                     current_mode   TEXT NOT NULL,
@@ -26,10 +31,10 @@ class SessionStore:
                     last_compacted TEXT,
                     metadata       TEXT NOT NULL DEFAULT '{}'
                 )
-                """
+                """)
             )
             self._conn.execute(
-                """
+                sql(self.config, """
                 CREATE TABLE IF NOT EXISTS messages (
                     session_id   TEXT NOT NULL,
                     seq          INTEGER NOT NULL,
@@ -39,41 +44,41 @@ class SessionStore:
                     PRIMARY KEY (session_id, seq),
                     FOREIGN KEY (session_id) REFERENCES sessions(id)
                 )
-                """
+                """)
             )
             self._conn.commit()
 
     def load_session(self, session_id: str) -> dict[str, Any] | None:
         with self._lock:
             row = self._conn.execute(
-                """
+                sql(self.config, """
                 SELECT id, current_mode, created_at, updated_at, last_compacted, metadata
                 FROM sessions
                 WHERE id = ?
-                """,
+                """),
                 (session_id,),
             ).fetchone()
             if row is None:
                 return None
             msg_rows = self._conn.execute(
-                """
+                sql(self.config, """
                 SELECT message_json
                 FROM messages
                 WHERE session_id = ?
                 ORDER BY seq ASC
-                """,
+                """),
                 (session_id,),
             ).fetchall()
 
         return {
-            "id": row["id"],
-            "current_mode": row["current_mode"],
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
-            "last_compacted": row["last_compacted"],
-            "metadata": json.loads(row["metadata"] or "{}"),
+            "id": row_get(row, "id"),
+            "current_mode": row_get(row, "current_mode"),
+            "created_at": row_get(row, "created_at"),
+            "updated_at": row_get(row, "updated_at"),
+            "last_compacted": row_get(row, "last_compacted"),
+            "metadata": json.loads(row_get(row, "metadata", "{}") or "{}"),
             "messages": [
-                json.loads(msg_row["message_json"])
+                json.loads(row_get(msg_row, "message_json", "{}"))
                 for msg_row in msg_rows
             ],
         }
@@ -84,9 +89,19 @@ class SessionStore:
             ensure_ascii=False,
             default=str,
         )
+        message_rows = [
+            (
+                session.id,
+                seq,
+                str(message.get("role", "")),
+                message.get("timestamp"),
+                json.dumps(message, ensure_ascii=False, default=str),
+            )
+            for seq, message in enumerate(session.messages)
+        ]
         with self._lock:
             self._conn.execute(
-                """
+                sql(self.config, """
                 INSERT INTO sessions (
                     id, current_mode, created_at, updated_at, last_compacted, metadata
                 )
@@ -96,7 +111,7 @@ class SessionStore:
                     updated_at = excluded.updated_at,
                     last_compacted = excluded.last_compacted,
                     metadata = excluded.metadata
-                """,
+                """),
                 (
                     session.id,
                     session.current_mode,
@@ -106,45 +121,69 @@ class SessionStore:
                     metadata_json,
                 ),
             )
-            self._conn.execute(
-                "DELETE FROM messages WHERE session_id = ?",
+            existing_rows = self._conn.execute(
+                sql(self.config, """
+                SELECT seq, message_json
+                FROM messages
+                WHERE session_id = ?
+                ORDER BY seq ASC
+                """),
                 (session.id,),
-            )
-            self._conn.executemany(
+            ).fetchall()
+            existing_by_seq = {
+                int(row_get(row, "seq")): row_get(row, "message_json", "")
+                for row in existing_rows
+            }
+            first_changed = None
+            for seq, row in enumerate(message_rows):
+                if existing_by_seq.get(seq) != row[4]:
+                    first_changed = seq
+                    break
+            if first_changed is None and any(
+                seq >= len(message_rows) for seq in existing_by_seq
+            ):
+                first_changed = len(message_rows)
+
+            rows_to_insert = []
+            if first_changed is not None:
+                self._conn.execute(
+                    sql(self.config, """
+                    DELETE FROM messages
+                    WHERE session_id = ? AND seq >= ?
+                    """),
+                    (session.id, first_changed),
+                )
+                rows_to_insert = message_rows[first_changed:]
+
+            execute_many(
+                self._conn,
+                self.config,
                 """
                 INSERT INTO messages (session_id, seq, role, timestamp, message_json)
                 VALUES (?, ?, ?, ?, ?)
                 """,
-                [
-                    (
-                        session.id,
-                        seq,
-                        str(message.get("role", "")),
-                        message.get("timestamp"),
-                        json.dumps(message, ensure_ascii=False, default=str),
-                    )
-                    for seq, message in enumerate(session.messages)
-                ],
+                rows_to_insert,
             )
+            self.last_message_insert_count = len(rows_to_insert)
             self._conn.commit()
 
     def list_sessions(self) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._conn.execute(
-                """
+                sql(self.config, """
                 SELECT id, current_mode, created_at, updated_at, last_compacted, metadata
                 FROM sessions
                 ORDER BY updated_at DESC
-                """
+                """)
             ).fetchall()
         return [
             {
-                "id": row["id"],
-                "current_mode": row["current_mode"],
-                "created_at": row["created_at"],
-                "updated_at": row["updated_at"],
-                "last_compacted": row["last_compacted"],
-                "metadata": json.loads(row["metadata"] or "{}"),
+                "id": row_get(row, "id"),
+                "current_mode": row_get(row, "current_mode"),
+                "created_at": row_get(row, "created_at"),
+                "updated_at": row_get(row, "updated_at"),
+                "last_compacted": row_get(row, "last_compacted"),
+                "metadata": json.loads(row_get(row, "metadata", "{}") or "{}"),
             }
             for row in rows
         ]
@@ -152,11 +191,11 @@ class SessionStore:
     def delete_session(self, session_id: str) -> bool:
         with self._lock:
             self._conn.execute(
-                "DELETE FROM messages WHERE session_id = ?",
+                sql(self.config, "DELETE FROM messages WHERE session_id = ?"),
                 (session_id,),
             )
             cursor = self._conn.execute(
-                "DELETE FROM sessions WHERE id = ?",
+                sql(self.config, "DELETE FROM sessions WHERE id = ?"),
                 (session_id,),
             )
             self._conn.commit()

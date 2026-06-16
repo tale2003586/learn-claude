@@ -46,7 +46,7 @@ class StatusCommandsPlugin(Plugin):
         lines = ["Runtime status"]
         lines.append("")
         lines.append("Plugin manager:")
-        plugin_manager = getattr(self, "_plugin_manager", None)
+        plugin_manager = getattr(self.context, "plugin_manager", None)
         if plugin_manager is not None:
             lines.append(plugin_manager.status_text())
         else:

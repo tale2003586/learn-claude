@@ -106,11 +106,99 @@ class WebSessionDeletionTests(unittest.TestCase):
         service._runtime = SimpleNamespace(loop=SimpleNamespace(sessions=manager))
 
         async def run_delete():
-            service._turn_lock = asyncio.Lock()
+            service._session_locks = {}
             return await service._delete_session_async("web:default")
 
         self.assertTrue(asyncio.run(run_delete()))
         self.assertEqual(["web:default"], deleted)
+
+
+class AgentServiceLockingTests(unittest.TestCase):
+    def test_different_web_sessions_do_not_share_a_turn_lock(self) -> None:
+        service = AgentService()
+
+        class Runtime:
+            def __init__(self) -> None:
+                self.active = 0
+                self.max_active = 0
+
+            async def run_message(self, *, content, channel, chat_id, metadata, on_text):
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+                await asyncio.sleep(0.01)
+                await service._handle_outbound(
+                    SimpleNamespace(chat_id=chat_id, content=f"reply:{chat_id}")
+                )
+                self.active -= 1
+
+        runtime = Runtime()
+        service._runtime = runtime
+        service._session_locks = {}
+
+        async def run_two():
+            service._loop = asyncio.get_running_loop()
+            return await asyncio.gather(
+                service._ask_async(
+                    session_id="a",
+                    content="hello a",
+                    user_id="local",
+                    user_role="admin",
+                ),
+                service._ask_async(
+                    session_id="b",
+                    content="hello b",
+                    user_id="local",
+                    user_role="admin",
+                ),
+            )
+
+        replies = asyncio.run(run_two())
+
+        self.assertEqual(["reply:local:a", "reply:local:b"], replies)
+        self.assertEqual(2, runtime.max_active)
+
+    def test_same_web_session_is_still_serialized(self) -> None:
+        service = AgentService()
+
+        class Runtime:
+            def __init__(self) -> None:
+                self.active = 0
+                self.max_active = 0
+
+            async def run_message(self, *, content, channel, chat_id, metadata, on_text):
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+                await asyncio.sleep(0.01)
+                await service._handle_outbound(
+                    SimpleNamespace(chat_id=chat_id, content=f"reply:{content}")
+                )
+                self.active -= 1
+
+        runtime = Runtime()
+        service._runtime = runtime
+        service._session_locks = {}
+
+        async def run_two():
+            service._loop = asyncio.get_running_loop()
+            return await asyncio.gather(
+                service._ask_async(
+                    session_id="same",
+                    content="first",
+                    user_id="local",
+                    user_role="admin",
+                ),
+                service._ask_async(
+                    session_id="same",
+                    content="second",
+                    user_id="local",
+                    user_role="admin",
+                ),
+            )
+
+        replies = asyncio.run(run_two())
+
+        self.assertEqual(["reply:first", "reply:second"], replies)
+        self.assertEqual(1, runtime.max_active)
 
 
 if __name__ == "__main__":

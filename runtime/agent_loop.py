@@ -18,6 +18,7 @@ class AgentLoop:
         router: ModeRouter,
         plugin_manager=None,
         task_session_runner=None,
+        subagent_runner=None,
         trace_store=None,
     ) -> None:
         self.bus = bus
@@ -26,150 +27,177 @@ class AgentLoop:
         self.router = router
         self.plugin_manager = plugin_manager
         self.task_session_runner = task_session_runner
+        self.subagent_runner = subagent_runner
         self.trace_store = trace_store
 
     async def run_once(self, on_text: Callable[[str], None] | None = None) -> None:
         inbound = await self.bus.consume_inbound()
+        await self.run_inbound(inbound, on_text=on_text)
 
+    async def run_inbound(
+        self,
+        inbound,
+        on_text: Callable[[str], None] | None = None,
+    ) -> None:
         session = self.sessions.get_or_create(inbound.session_key)
-        self._apply_inbound_identity(session, inbound)
-        run_state = self._start_run(inbound, session)
+        run_state = self._receive(session, inbound)
 
         try:
-            if self.plugin_manager is not None:
-                plugin_result = self.plugin_manager.before_turn(inbound, session)
-                if plugin_result.abort:
-                    run_state.set_route(
-                        mode=session.current_mode,
-                        execution_path="plugin_abort",
-                        intent="plugin_abort",
-                    )
-                    self._trace(run_state, "plugin_aborted_turn", {
-                        "reply_preview": event_preview(plugin_result.reply),
-                    })
-                    self._finish_run(
-                        run_state,
-                        session,
-                        plugin_result.reply,
-                        report={"execution_path": "plugin_abort"},
-                    )
-                    self.sessions.save(session)
-                    self._emit_text(on_text, plugin_result.reply)
-                    await self.bus.publish_outbound(OutboundMessage(
-                        channel=inbound.channel,
-                        chat_id=inbound.chat_id,
-                        content=plugin_result.reply,
-                    ))
-                    return
-
-            route = self.router.route(session, inbound.content)
-            run_state.set_route(
-                mode=session.current_mode,
-                execution_path=route.execution,
-                intent=route.intent,
-                profile=route.profile.name,
-            )
-            self._trace(run_state, "route_selected", {
-                "intent": route.intent,
-                "execution": route.execution,
-                "profile": route.profile.name,
-                "tool_mode": route.profile.tool_mode,
-                "confidence": route.confidence,
-                "reason": route.reason,
-                "switched": route.switched,
-            })
-
-            if route.switched:
-                reply = route.switch_message or ""
-                session.add_message(
-                    "user",
-                    inbound.content,
-                    media=inbound.media,
-                    metadata=self._message_metadata(inbound, run_state),
-                )
-                session.add_message(
-                    "assistant",
-                    reply,
-                    metadata={
-                        "kind": "mode_switch",
-                        "mode": session.current_mode,
-                        "run_id": run_state.run_id,
-                    },
-                )
-                self._finish_run(
-                    run_state,
-                    session,
-                    reply,
-                    report={"execution_path": "direct_reply"},
-                )
-                self.sessions.save(session)
-                self._emit_text(on_text, reply)
-                await self.bus.publish_outbound(OutboundMessage(
-                    channel=inbound.channel,
-                    chat_id=inbound.chat_id,
-                    content=reply,
-                ))
+            if await self._preprocess(session, inbound, run_state, on_text):
                 return
-
-            session.add_message(
-                "user",
-                inbound.content,
-                media=inbound.media,
-                metadata=self._message_metadata(inbound, run_state),
-            )
-
-            if (
-                self.task_session_runner is not None
-                and route.profile.tool_mode == "coding"
-            ):
-                task_kwargs = {
-                    "parent_session": session,
-                    "user_text": inbound.content,
-                    "profile": route.profile,
-                }
-                workspace_root = (inbound.metadata or {}).get("workspace_root")
-                if workspace_root:
-                    task_kwargs["workspace_root"] = workspace_root
-                if self.trace_store is not None:
-                    task_kwargs.update({
-                        "run_state": run_state,
-                        "trace_store": self.trace_store,
-                    })
-                reply = self.task_session_runner.run_coding_task(**task_kwargs)
-                session.add_message(
-                    "assistant",
-                    reply,
-                    metadata={"run_id": run_state.run_id},
-                )
-                self._emit_text(on_text, reply)
-            else:
-                reply = self.pipeline.run(
-                    session,
-                    route.profile,
-                    on_text=on_text,
-                    run_state=run_state,
-                    trace_store=self.trace_store,
-                )
-
-            if self.plugin_manager is not None:
-                self.plugin_manager.after_turn(inbound, session, reply)
-
-            self._finish_run(
-                run_state,
-                session,
-                reply,
-                report={"execution_path": route.execution},
-            )
-            self.sessions.save(session)
-
-            await self.bus.publish_outbound(OutboundMessage(
-                channel=inbound.channel,
-                chat_id=inbound.chat_id,
-                content=reply,
-            ))
+            route = self._route(session, inbound, run_state)
+            if route.switched:
+                await self._handle_switch(session, inbound, route, run_state, on_text)
+                return
+            self._record(session, inbound, run_state)
+            reply = self._execute(session, inbound, route, run_state, on_text)
+            self._postprocess(session, inbound, reply)
+            await self._deliver(session, inbound, reply, route, run_state, on_text)
         except Exception as exc:
             self._fail_run(run_state, session, exc)
             raise
+
+    def _receive(self, session, inbound) -> RunState:
+        self._apply_inbound_identity(session, inbound)
+        return self._start_run(inbound, session)
+
+    async def _preprocess(self, session, inbound, run_state, on_text) -> bool:
+        if self.plugin_manager is None:
+            return False
+        plugin_result = self.plugin_manager.before_turn(inbound, session)
+        if not plugin_result.abort:
+            return False
+        run_state.set_route(
+            mode=session.current_mode,
+            execution_path="plugin_abort",
+            intent="plugin_abort",
+        )
+        self._trace(run_state, "plugin_aborted_turn", {
+            "reply_preview": event_preview(plugin_result.reply),
+        })
+        self._finish_run(
+            run_state,
+            session,
+            plugin_result.reply,
+            report={"execution_path": "plugin_abort"},
+        )
+        self.sessions.save(session)
+        self._emit_text(on_text, plugin_result.reply)
+        await self.bus.publish_outbound(OutboundMessage(
+            channel=inbound.channel,
+            chat_id=inbound.chat_id,
+            content=plugin_result.reply,
+        ))
+        return True
+
+    def _route(self, session, inbound, run_state):
+        route = self.router.route(session, inbound.content)
+        run_state.set_route(
+            mode=session.current_mode,
+            execution_path=route.execution,
+            intent=route.intent,
+            profile=route.profile.name,
+        )
+        self._trace(run_state, "route_selected", {
+            "intent": route.intent,
+            "execution": route.execution,
+            "profile": route.profile.name,
+            "tool_mode": route.profile.tool_mode,
+            "confidence": route.confidence,
+            "reason": route.reason,
+            "switched": route.switched,
+        })
+        return route
+
+    async def _handle_switch(self, session, inbound, route, run_state, on_text) -> None:
+        reply = route.switch_message or ""
+        session.add_message(
+            "user",
+            inbound.content,
+            media=inbound.media,
+            metadata=self._message_metadata(inbound, run_state),
+        )
+        session.add_message(
+            "assistant",
+            reply,
+            metadata={
+                "kind": "mode_switch",
+                "mode": session.current_mode,
+                "run_id": run_state.run_id,
+            },
+        )
+        self._finish_run(
+            run_state,
+            session,
+            reply,
+            report={"execution_path": "direct_reply"},
+        )
+        self.sessions.save(session)
+        self._emit_text(on_text, reply)
+        await self.bus.publish_outbound(OutboundMessage(
+            channel=inbound.channel,
+            chat_id=inbound.chat_id,
+            content=reply,
+        ))
+
+    def _record(self, session, inbound, run_state) -> None:
+        session.add_message(
+            "user",
+            inbound.content,
+            media=inbound.media,
+            metadata=self._message_metadata(inbound, run_state),
+        )
+
+    def _execute(self, session, inbound, route, run_state, on_text) -> str:
+        if self.subagent_runner is not None:
+            session.metadata["subagent_runner_available"] = True
+        if self.task_session_runner is not None and route.profile.tool_mode == "coding":
+            task_kwargs = {
+                "parent_session": session,
+                "user_text": inbound.content,
+                "profile": route.profile,
+            }
+            workspace_root = (inbound.metadata or {}).get("workspace_root")
+            if workspace_root:
+                task_kwargs["workspace_root"] = workspace_root
+            if self.trace_store is not None:
+                task_kwargs.update({
+                    "run_state": run_state,
+                    "trace_store": self.trace_store,
+                })
+            reply = self.task_session_runner.run_coding_task(**task_kwargs)
+            session.add_message(
+                "assistant",
+                reply,
+                metadata={"run_id": run_state.run_id},
+            )
+            self._emit_text(on_text, reply)
+            return reply
+        return self.pipeline.run(
+            session,
+            route.profile,
+            on_text=on_text,
+            run_state=run_state,
+            trace_store=self.trace_store,
+        )
+
+    def _postprocess(self, session, inbound, reply) -> None:
+        if self.plugin_manager is not None:
+            self.plugin_manager.after_turn(inbound, session, reply)
+
+    async def _deliver(self, session, inbound, reply, route, run_state, on_text) -> None:
+        self._finish_run(
+            run_state,
+            session,
+            reply,
+            report={"execution_path": route.execution},
+        )
+        self.sessions.save(session)
+        await self.bus.publish_outbound(OutboundMessage(
+            channel=inbound.channel,
+            chat_id=inbound.chat_id,
+            content=reply,
+        ))
 
     def _emit_text(
         self,
