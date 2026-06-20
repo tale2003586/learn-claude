@@ -97,6 +97,7 @@ real runner 更适合评估模型和 prompt/profile 的能力，但它有波动�
 - `TraceStore(eval_dir / "runs")`
 - task scoped `SessionManager`
 - `Pipeline(...)`
+- `ToolExecutor`，带 `ShellSafetyHook`、`ShellWorkspaceScopeHook(workspace)`、`FileWriteScopeHook(workspace)`、`ToolLoopGuardHook`、`ToolTraceHook`
 - `TaskSessionRunner(...)`
 - `WorkspaceResolver(allowed_roots=[workspaces_root], default_workspace=workspace)`
 - parent `Session(id=f"web:benchmark:{task.id}")`

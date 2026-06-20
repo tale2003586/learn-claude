@@ -120,11 +120,15 @@ workspace 级：
 - `workspace.resolved`
 - `workspace.snapshot.captured`
 - `workspace.diff.written`
+- `task_session_started`
+- `task_session_completed`
 
 memory / RAG 级：
 
+- `memory.lifecycle.scheduled`
 - `memory.lifecycle.started`
 - `memory.lifecycle.completed`
+- `memory.lifecycle.failed`
 - `memory.vector.turn_indexed`
 - `memory.vector.files_indexed`
 - `memory.candidate.processed`
@@ -197,7 +201,15 @@ TRACE_INDEX_ENABLED=1
 TRACE_DATABASE_URL=...
 ```
 
-如果没有单独配置 `TRACE_DATABASE_URL`，会尝试复用 `DATABASE_URL`。当前系统设计文档按 PostgreSQL 主路径描述。
+如果没有单独配置 `TRACE_DATABASE_URL`，会尝试复用 `DATABASE_URL`。推荐生产路径是 PostgreSQL，但代码支持本地 SQLite 回退。
+
+如果两者都没有配置，`TraceIndexStore` 会回退到本地 SQLite：
+
+```text
+.runs/trace_index.db
+```
+
+`TRACE_INDEX_ENABLED` 默认开启，显式设置为 `0`、`false`、`no` 或 `off` 才会关闭索引。
 
 索引层主要用于：
 
@@ -279,7 +291,7 @@ Web 侧可以读取这些文件，把它们展示成：
 - run state
 - trace 表格
 
-目前 trace viewer 的核心价值是不用只看原始文件。
+目前 trace viewer 的核心价值是不用只看原始文件。Web 侧 run 列表和 run 详情要求 admin 角色；普通用户不能通过这些接口查看全局 run trace。
 
 ## 当前边界
 
@@ -289,6 +301,7 @@ Web 侧可以读取这些文件，把它们展示成：
 - 跨进程 trace collector。
 - 大规模原始 trace 存储后端。
 - span duration 的统一闭合模型。
+- 后台记忆事件可能在主 run 报告之后补写，因此实时查看时可能短暂看到 memory 摘要尚未完成。
 
 但字段上已经有 run/session/request/span/parent_span/step/tool_call_id，后续导出 OTEL 不需要重做整条链路。关系型索引已经能支撑本地 UI 查询，但它目前仍是索引层，不是完整 trace warehouse。
 

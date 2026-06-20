@@ -1,34 +1,44 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
-import re
 import traceback
 import uuid
-from typing import Any
 
+from agents.subagent.failure import (
+    STATUS_FAILED,
+    classify_subagent_failure,
+    internal_error_failure,
+    status_for_result,
+    unknown_agent_type_failure,
+)
+from agents.subagent.inspection import count_tool_calls, extract_files_touched
+from agents.subagent.prompting import (
+    extract_structured_result,
+    incomplete_summary,
+    subtask_prompt,
+)
+from agents.subagent.result import SubagentResult
 from agents.subagent.tools import (
     DEFAULT_SUBTASK_AGENT_TYPE,
     SUBTASK_SYSTEM_PROMPTS,
     SUBTASK_TOOL_WHITELIST,
 )
+from agents.subagent.trace import (
+    parent_span_id as trace_parent_span_id,
+    subagent_span_id as trace_subagent_span_id,
+    subagent_trace_run_state,
+    trace_subagent_completed,
+    trace_subagent_started,
+)
+from config import SUBAGENT_MAX_REASONING_STEPS
 from modes.base import ModeProfile
 from runtime.context import ContextBuilder
+from runtime.failure_reasons import (
+    REASONING_LOOP_STOP_REASON_KEY,
+    StopReason,
+)
 from runtime.pipeline import Pipeline, get_last_assistant_text
 from sessions import Session
 from tools.tool_registry import ToolRegistry
-
-
-@dataclass
-class SubagentResult:
-    agent_type: str
-    success: bool
-    summary: str
-    files_touched: list[str] = field(default_factory=list)
-    tool_count: int = 0
-    error: str | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
 
 
 class TaskSubagentRunner:
@@ -44,7 +54,7 @@ class TaskSubagentRunner:
         self.max_reasoning_steps = (
             max_reasoning_steps
             if max_reasoning_steps is not None
-            else min(base_pipeline.max_reasoning_steps, 12)
+            else min(base_pipeline.max_reasoning_steps, SUBAGENT_MAX_REASONING_STEPS)
         )
 
     def run(
@@ -54,17 +64,28 @@ class TaskSubagentRunner:
         agent_type: str = DEFAULT_SUBTASK_AGENT_TYPE,
         description: str = "",
         parent_session=None,
+        trace_store=None,
+        parent_run_state=None,
+        parent_span_id: str | None = None,
     ) -> SubagentResult:
         requested_agent_type = agent_type
         agent_type = _normalize_agent_type(agent_type)
         if agent_type is None:
+            failure = unknown_agent_type_failure(requested_agent_type)
             return SubagentResult(
                 agent_type=str(requested_agent_type or ""),
                 success=False,
                 summary="",
+                status=STATUS_FAILED,
                 files_touched=[],
                 tool_count=0,
-                error=f"Unknown agent_type: {requested_agent_type}",
+                error=failure.message,
+                incomplete=True,
+                failure_reason=failure.reason,
+                failure_message=failure.message,
+                recoverable=failure.recoverable,
+                retry_hint=failure.retry_hint,
+                evidence=failure.evidence,
             )
         session = self._new_session(
             prompt=prompt,
@@ -74,25 +95,107 @@ class TaskSubagentRunner:
         )
         pipeline = self._sub_pipeline(agent_type)
         profile = self._profile(agent_type)
+        span_id = trace_subagent_span_id(parent_span_id)
+        trace_run_state = subagent_trace_run_state(
+            parent_run_state=parent_run_state,
+            session=session,
+            agent_type=agent_type,
+            description=description,
+            subagent_span_id=span_id,
+        )
 
         try:
-            summary = pipeline.run(session, profile)
-            return SubagentResult(
+            trace_subagent_started(
+                trace_store,
+                trace_run_state,
+                span_id=span_id,
+                parent_span_id=trace_parent_span_id(span_id),
+                prompt=prompt,
                 agent_type=agent_type,
-                success=True,
-                summary=summary or get_last_assistant_text(session.messages),
-                files_touched=_extract_files_touched(session.messages),
-                tool_count=_count_tool_calls(session.messages),
+                description=description,
             )
+            summary = pipeline.run(
+                session,
+                profile,
+                run_state=trace_run_state,
+                trace_store=trace_store,
+                trace_parent_span_id=span_id,
+            )
+            stop_reason = _stop_reason(session)
+            truncated = stop_reason == StopReason.REASONING_STEP_LIMIT.value
+            if truncated:
+                summary = incomplete_summary(summary or get_last_assistant_text(session.messages))
+            summary_text = summary or get_last_assistant_text(session.messages)
+            structured = extract_structured_result(summary_text)
+            failure = classify_subagent_failure(
+                session_messages=session.messages,
+                stop_reason=stop_reason,
+                structured=structured,
+                truncated=truncated,
+            )
+            findings = structured.get("findings") or []
+            incomplete = bool(truncated or structured.get("incomplete") or failure)
+            success = not incomplete and failure is None
+            result = SubagentResult(
+                agent_type=agent_type,
+                success=success,
+                summary=summary_text,
+                status=status_for_result(
+                    success=success,
+                    incomplete=incomplete,
+                    findings=findings,
+                    failure=failure,
+                ),
+                files_touched=extract_files_touched(session.messages),
+                tool_count=count_tool_calls(session.messages),
+                error=failure.message if failure else None,
+                truncated=truncated,
+                stop_reason=stop_reason,
+                findings=findings,
+                incomplete=incomplete,
+                failure_reason=failure.reason if failure else None,
+                failure_message=failure.message if failure else None,
+                recoverable=failure.recoverable if failure else False,
+                retry_hint=failure.retry_hint if failure else None,
+                evidence=failure.evidence if failure else [],
+            )
+            trace_subagent_completed(
+                trace_store,
+                trace_run_state,
+                span_id=span_id,
+                parent_span_id=trace_parent_span_id(span_id),
+                result=result,
+            )
+            return result
         except Exception as exc:
-            return SubagentResult(
+            error = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
+            failure = internal_error_failure(error)
+            result = SubagentResult(
                 agent_type=agent_type,
                 success=False,
                 summary="",
-                files_touched=_extract_files_touched(session.messages),
-                tool_count=_count_tool_calls(session.messages),
-                error=f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}",
+                status=STATUS_FAILED,
+                files_touched=extract_files_touched(session.messages),
+                tool_count=count_tool_calls(session.messages),
+                error=error,
+                truncated=False,
+                stop_reason=_stop_reason(session),
+                findings=[],
+                incomplete=True,
+                failure_reason=failure.reason,
+                failure_message=failure.message,
+                recoverable=failure.recoverable,
+                retry_hint=failure.retry_hint,
+                evidence=failure.evidence,
             )
+            trace_subagent_completed(
+                trace_store,
+                trace_run_state,
+                span_id=span_id,
+                parent_span_id=trace_parent_span_id(span_id),
+                result=result,
+            )
+            return result
 
     def _sub_pipeline(self, agent_type: str) -> Pipeline:
         base_runner = self.base_pipeline.agent_runner
@@ -172,21 +275,10 @@ class TaskSubagentRunner:
         )
         session.add_message(
             "user",
-            _subtask_prompt(prompt=prompt, agent_type=agent_type, description=description),
+            subtask_prompt(prompt=prompt, agent_type=agent_type, description=description),
             metadata={"kind": "subtask_prompt"},
         )
         return session
-
-
-def _subtask_prompt(*, prompt: str, agent_type: str, description: str) -> str:
-    title = description.strip() or agent_type
-    return (
-        "<subtask>\n"
-        f"Description: {title}\n"
-        f"Agent type: {agent_type}\n\n"
-        f"{prompt.strip()}\n"
-        "</subtask>"
-    )
 
 
 def _normalize_agent_type(agent_type: str | None) -> str | None:
@@ -196,42 +288,6 @@ def _normalize_agent_type(agent_type: str | None) -> str | None:
     return value
 
 
-def _count_tool_calls(messages: list[dict[str, Any]]) -> int:
-    count = 0
-    for message in messages:
-        calls = message.get("tool_calls")
-        if isinstance(calls, list):
-            count += len(calls)
-    return count
-
-
-def _extract_files_touched(messages: list[dict[str, Any]]) -> list[str]:
-    paths: set[str] = set()
-    for message in messages:
-        if message.get("role") != "tool":
-            continue
-        args = message.get("final_arguments")
-        if isinstance(args, dict):
-            _collect_paths(args, paths)
-        content = str(message.get("content") or "")
-        for match in re.findall(r"(?:Wrote|Edited)\s+(?:\d+\s+bytes\s+to\s+)?([^\n]+)", content):
-            cleaned = match.strip()
-            if cleaned and not cleaned.startswith("Error:"):
-                paths.add(cleaned)
-    return sorted(paths)
-
-
-def _collect_paths(value: Any, paths: set[str]) -> None:
-    if isinstance(value, dict):
-        for key, item in value.items():
-            if key in {"path", "file", "filename"} and isinstance(item, str):
-                paths.add(item)
-            elif key == "paths" and isinstance(item, list):
-                for path in item:
-                    if isinstance(path, str):
-                        paths.add(path)
-            else:
-                _collect_paths(item, paths)
-    elif isinstance(value, list):
-        for item in value:
-            _collect_paths(item, paths)
+def _stop_reason(session: Session) -> str | None:
+    value = (getattr(session, "metadata", {}) or {}).get(REASONING_LOOP_STOP_REASON_KEY)
+    return str(value) if value else None

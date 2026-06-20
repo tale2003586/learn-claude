@@ -35,25 +35,200 @@ BASE_TOOLS = [
     ),
     function_tool(
         "list_files",
-        "List files and directories inside the current coding workspace.",
+        "List files and directories inside the current coding workspace. Use workspace-relative paths only; use '.' for the workspace root, never an absolute path.",
         {
             "path": {
                 "type": "string",
-                "description": "Optional relative directory path. Defaults to workspace root.",
+                "description": "Optional workspace-relative directory path. Use '.' or omit for workspace root. Never pass an absolute path.",
             },
             "recursive": {
                 "type": "boolean",
                 "description": "Recursively list files when true. Defaults to false.",
             },
+            "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Pagination offset for large listings. Use the next_offset returned by a truncated result.",
+            },
         },
     ),
     function_tool(
-        "read_file",
-        "Read UTF-8 file contents. Optionally limit the number of lines.",
+        "rg",
+        (
+            "Search text in the current coding workspace using ripgrep. "
+            "Use this instead of bash rg when you need fast, bounded search results. "
+            "Paths must be workspace-relative; pass path='.' or omit it for the workspace root."
+        ),
+        {
+            "pattern": {
+                "type": "string",
+                "description": "Regex pattern to search for. Set literal=true for exact text.",
+            },
+            "path": {
+                "type": "string",
+                "description": "Optional workspace-relative file or directory to search. Defaults to workspace root.",
+            },
+            "glob": {
+                "type": "string",
+                "description": "Optional ripgrep glob, such as '*.py' or '!*.md'.",
+            },
+            "max_matches": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "description": "Maximum output match lines to return. Defaults to 100, capped at 500.",
+            },
+            "case_sensitive": {
+                "type": "boolean",
+                "description": "Case-sensitive search when true. Defaults to true.",
+            },
+            "literal": {
+                "type": "boolean",
+                "description": "Treat pattern as literal text instead of a regex when true.",
+            },
+        },
+        ["pattern"],
+    ),
+    function_tool(
+        "grep",
+        (
+            "Search file contents in the current coding workspace with grep-like "
+            "path:line:content output. Use workspace-relative paths only; pass "
+            "path='.' or omit it for the workspace root."
+        ),
+        {
+            "pattern": {
+                "type": "string",
+                "description": "Regex pattern to search for. Set literal=true for exact text.",
+            },
+            "path": {
+                "type": "string",
+                "description": "Optional workspace-relative file or directory to search. Defaults to workspace root.",
+            },
+            "glob": {
+                "type": "string",
+                "description": "Optional file glob, such as '*.py' or '!*.md'.",
+            },
+            "max_matches": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "description": "Maximum output match lines to return. Defaults to 100, capped at 500.",
+            },
+            "case_sensitive": {
+                "type": "boolean",
+                "description": "Case-sensitive search when true. Defaults to true.",
+            },
+            "literal": {
+                "type": "boolean",
+                "description": "Treat pattern as literal text instead of a regex when true.",
+            },
+            "recursive": {
+                "type": "boolean",
+                "description": "Recursively search directories when true. Defaults to true.",
+            },
+        },
+        ["pattern"],
+    ),
+    function_tool(
+        "nl",
+        (
+            "Read a workspace file with stable one-based line numbers, similar to "
+            "nl -ba. Use this when you need exact line references or targeted "
+            "line windows. If the result is truncated, continue with the returned offset."
+        ),
         {
             "path": {
                 "type": "string",
-                "description": "Relative path to the file.",
+                "description": "Workspace-relative path to the file. Never pass an absolute path.",
+            },
+            "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Zero-based starting line offset. Use the offset suggested by a truncated result to continue.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Max lines to read. If omitted, read as much as fits in the tool result budget.",
+            },
+            "number_blank_lines": {
+                "type": "boolean",
+                "description": "Number blank lines when true, matching nl -ba behavior. Defaults to true.",
+            },
+            "width": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 12,
+                "description": "Line number width. Defaults to 6.",
+            },
+        },
+        ["path"],
+    ),
+    function_tool(
+        "repo_map",
+        (
+            "Build a deterministic, paginated repository map for planning broad coding work. "
+            "Use this before repository-wide architecture review or multi-subsystem fan-out. "
+            "It returns directory aggregates and shallow file entries with optional line counts; "
+            "drill down with path=... instead of repeatedly listing directories."
+        ),
+        {
+            "path": {
+                "type": "string",
+                "description": "Optional workspace-relative subtree path. Use '.' or omit for workspace root.",
+            },
+            "max_depth": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Relative depth of directories/files to show. Defaults to the configured shallow overview.",
+            },
+            "include_lines": {
+                "type": "boolean",
+                "description": "Include inexpensive line counts for text files. Defaults to true.",
+            },
+            "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Line offset for continuing a truncated repo_map result.",
+            },
+        },
+    ),
+    function_tool(
+        "code_outline",
+        (
+            "Return a deterministic symbol outline for one source file. Use it for large files "
+            "before reading full contents; it returns path, total_lines, and symbols with names, "
+            "kinds, and line numbers."
+        ),
+        {
+            "path": {
+                "type": "string",
+                "description": "Workspace-relative source file path. Never pass an absolute path.",
+            },
+            "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Line offset for continuing a truncated code_outline result.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Max output lines to return. If omitted, return as much as fits.",
+            },
+        },
+        ["path"],
+    ),
+    function_tool(
+        "read_file",
+        "Read UTF-8 file contents from the current coding workspace. Use workspace-relative paths only; never an absolute path. If the result is truncated, continue with the returned offset.",
+        {
+            "path": {
+                "type": "string",
+                "description": "Workspace-relative path to the file. Never pass an absolute path.",
+            },
+            "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Starting line offset. Use the offset suggested by a truncated read_file result to continue.",
             },
             "limit": {
                 "type": "integer",
@@ -64,11 +239,11 @@ BASE_TOOLS = [
     ),
     function_tool(
         "write_file",
-        "Write content to a file. Creates parent directories if needed.",
+        "Write content to a file in the current coding workspace. Use workspace-relative paths only; never an absolute path.",
         {
             "path": {
                 "type": "string",
-                "description": "Relative path for the file.",
+                "description": "Workspace-relative path for the file. Never pass an absolute path.",
             },
             "content": {
                 "type": "string",
@@ -79,11 +254,11 @@ BASE_TOOLS = [
     ),
     function_tool(
         "edit_file",
-        "Replace exact text in a file. Use for precise edits.",
+        "Replace exact text in a workspace file. Use workspace-relative paths only; never an absolute path.",
         {
             "path": {
                 "type": "string",
-                "description": "Relative path to the file.",
+                "description": "Workspace-relative path to the file. Never pass an absolute path.",
             },
             "old_text": {
                 "type": "string",
@@ -203,6 +378,11 @@ STORAGE_TOOLS = [
                 "type": "integer",
                 "description": "Optional maximum number of lines to return.",
             },
+            "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Starting line offset. Use the offset suggested by a truncated result to continue.",
+            },
         },
         ["path"],
     ),
@@ -253,6 +433,11 @@ SANDBOX_TOOLS = [
             "limit": {
                 "type": "integer",
                 "description": "Optional maximum number of lines to return.",
+            },
+            "offset": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Starting line offset. Use the offset suggested by a truncated result to continue.",
             },
         },
         ["path"],
@@ -493,8 +678,8 @@ TEAMMATE_PROTOCOL_TOOLS = [
 LEAD_ONLY_TOOLS = [
     function_tool(
         "task",
-        """Spawn a short-lived subagent for a focused subtask with fresh context.
-Use for bounded exploration or implementation work when a one-off result is enough.""",
+        """Spawn a short-lived subagent for one bounded subtask with fresh, isolated context.
+Subagents have about 16 reasoning steps and a restricted tool set. They are best for locating, listing, or extracting local facts from explicit files. For large files, give them code_outline-first instructions and targeted line windows. They are not suited for broad cross-file synthesis, multi-round design work, or implementation that needs iteration; use spawn_teammate for that.""",
         {
             "prompt": {
                 "type": "string",
@@ -509,13 +694,38 @@ Use for bounded exploration or implementation work when a one-off result is enou
                 "enum": ["explore", "code", "plan"],
                 "description": "Subagent type.",
             },
+            "scope": {
+                "type": "object",
+                "description": "Required bounded file scope for file-oriented subagents. files must come from repo_map/list_files/code_outline, use verified workspace-relative file paths only, and contain at most 5 files.",
+                "properties": {
+                    "files": {
+                        "type": "array",
+                        "maxItems": 5,
+                        "items": {"type": "string"},
+                        "description": "Verified workspace-relative file paths. Do not guess file names or pass directories.",
+                    },
+                },
+                "required": ["files"],
+            },
+            "objective": {
+                "type": "string",
+                "description": "Optional single-sentence objective for the subagent.",
+            },
+            "deliverable": {
+                "type": "string",
+                "description": "Optional expected output shape, such as findings with path/lines/note.",
+            },
+            "budget": {
+                "type": "object",
+                "description": "Optional budget hints such as max_files or max_steps.",
+            },
         },
         ["prompt"],
     ),
     function_tool(
         "parallel_tasks",
-        """Spawn several short-lived subagents in parallel for independent subtasks.
-Use when exploration, review, or implementation shards do not depend on each other.""",
+        """Spawn several short-lived subagents in parallel for independent, bounded subtasks.
+Each subagent has about 16 reasoning steps, isolated context, and restricted tools. Use only after repo_map or another deterministic step gives concrete scopes. Good uses: bounded locate/list/extract shards with explicit files; use code_outline for large files before targeted reads. Bad uses: broad directory-level architecture synthesis, writing code with iteration, or multi-round feedback; use spawn_teammate or the parent agent for those.""",
         {
             "tasks": {
                 "type": "array",
@@ -535,6 +745,31 @@ Use when exploration, review, or implementation shards do not depend on each oth
                             "type": "string",
                             "enum": ["explore", "code", "plan"],
                             "description": "Subagent type.",
+                        },
+                        "scope": {
+                            "type": "object",
+                            "description": "Required bounded file scope for file-oriented subagents. files must come from repo_map/list_files/code_outline, use verified workspace-relative file paths only, and contain at most 5 files.",
+                            "properties": {
+                                "files": {
+                                    "type": "array",
+                                    "maxItems": 5,
+                                    "items": {"type": "string"},
+                                    "description": "Verified workspace-relative file paths. Do not guess file names or pass directories.",
+                                },
+                            },
+                            "required": ["files"],
+                        },
+                        "objective": {
+                            "type": "string",
+                            "description": "Optional single-sentence objective for this subagent.",
+                        },
+                        "deliverable": {
+                            "type": "string",
+                            "description": "Optional expected output shape, such as findings with path/lines/note.",
+                        },
+                        "budget": {
+                            "type": "object",
+                            "description": "Optional budget hints such as max_files or max_steps.",
                         },
                     },
                     "required": ["prompt"],

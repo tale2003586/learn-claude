@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import unittest
 
 from agents.subagent.parallel import MAX_PARALLEL_SUBTASKS, run_parallel_tasks
+from runtime.failure_reasons import SubagentFailureReason
 
 
 class FakeRunner:
@@ -53,9 +54,12 @@ class ParallelTasksTests(unittest.TestCase):
         results = run_parallel_tasks(runner=runner, tasks=tasks, max_workers=20)
 
         self.assertEqual(MAX_PARALLEL_SUBTASKS, len(results))
-        self.assertEqual(MAX_PARALLEL_SUBTASKS, len(runner.calls))
+        self.assertEqual(MAX_PARALLEL_SUBTASKS + 1, len(runner.calls))
         self.assertFalse(results[3]["success"])
         self.assertIn("RuntimeError", results[3]["error"])
+        self.assertEqual(SubagentFailureReason.INTERNAL_ERROR.value, results[3]["failure_reason"])
+        self.assertEqual("failed", results[3]["status"])
+        self.assertEqual(1, results[3]["retry_count"])
 
     def test_timeout_returns_structured_error_without_waiting_forever(self) -> None:
         runner = FakeRunner(delay=0.03)
@@ -71,6 +75,9 @@ class ParallelTasksTests(unittest.TestCase):
         self.assertLess(elapsed, 0.02)
         self.assertFalse(results[0]["success"])
         self.assertIn("TimeoutError", results[0]["error"])
+        self.assertEqual(SubagentFailureReason.TIMEOUT.value, results[0]["failure_reason"])
+        self.assertEqual("timeout", results[0]["stop_reason"])
+        self.assertTrue(results[0]["recoverable"])
 
 
 if __name__ == "__main__":

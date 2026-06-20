@@ -175,10 +175,12 @@ summary、history summarizer、task conclusion 这些一次性模型任务不走
 
 - history summarizer
 - task conclusion extractor
+- candidate memory extractor
+- security RAG route classifier
 
 这些任务只需要一次模型请求，不需要完整 `ReasoningLoop`。
 
-`ModelTaskRunner.run_text()` 支持 `on_error` 回调。调用方可以在 history summary、候选记忆提取、RAG route classifier 这类后台模型任务失败时写 trace 或降级，而不是把一次辅助模型失败直接变成主 run 失败。
+`ModelTaskRunner.run()` 根据 `AgentSpec.model_purpose` 选择 routed provider，并用 `tools=[]`、`tool_choice="none"` 发起一次模型调用。构造 runner 时可以传 `on_error` 回调，调用方可以在辅助模型任务失败时写 trace 或降级，而不是把一次辅助模型失败直接变成主 run 失败。
 
 在 `runtime/bootstrap.py` 中：
 

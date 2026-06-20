@@ -190,7 +190,7 @@ class AgentService:
         user_role: str = DEFAULT_USER_ROLE,
         workspace_root: str | None = None,
         on_text: Callable[[str], None] | None = None,
-        timeout: int = 180,
+        timeout: int = 1800,
     ) -> str:
         self.ensure_started()
         if self._loop is None:
@@ -722,12 +722,14 @@ def _read_run_detail(run_id: str) -> dict[str, Any]:
         raise ValueError("Invalid run_id.")
     if not run_dir.is_dir():
         raise FileNotFoundError(run_id)
+    events = _read_trace_jsonl(run_dir / "trace.jsonl")
     return {
         "run_id": run_id,
         "run_state": _read_json_file(run_dir / "run_state.json"),
         "report": _read_json_file(run_dir / "report.json"),
         "metrics": _read_json_file(run_dir / "metrics.json"),
-        "events": _read_trace_jsonl(run_dir / "trace.jsonl"),
+        "events": events,
+        "subagents": _build_subagent_logs(events),
     }
 
 
@@ -755,6 +757,274 @@ def _read_json_file(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _build_subagent_logs(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for event in events or []:
+        if not _is_subagent_trace_event(event):
+            continue
+        session_id = str(event.get("session_id") or "")
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        key = session_id or str(event.get("span_id") or f"subagent:{len(order)}")
+        if key not in groups:
+            groups[key] = _empty_subagent_group(key)
+            order.append(key)
+        group = groups[key]
+        group["events"].append(_subagent_event_summary(event))
+        group["event_count"] += 1
+        name = str(event.get("event") or "")
+        if not group["started_at"]:
+            group["started_at"] = str(event.get("timestamp") or "")
+        group["finished_at"] = str(event.get("timestamp") or group["finished_at"] or "")
+        if name == "subagent.started":
+            group["agent_type"] = str(payload.get("agent_type") or group["agent_type"])
+            group["description"] = str(payload.get("description") or group["description"])
+            group["prompt_preview"] = str(payload.get("prompt_preview") or "")
+            group["span_id"] = str(event.get("span_id") or group["span_id"])
+            group["parent_span_id"] = str(event.get("parent_span_id") or group["parent_span_id"])
+        elif name == "subagent.completed":
+            group["agent_type"] = str(payload.get("agent_type") or group["agent_type"])
+            group["success"] = payload.get("success")
+            group["truncated"] = bool(payload.get("truncated"))
+            group["stop_reason"] = str(payload.get("stop_reason") or "")
+            group["summary_preview"] = str(payload.get("summary_preview") or "")
+            group["error_preview"] = str(payload.get("error_preview") or "")
+            group["tool_count"] = _int_value(payload.get("tool_count"), group["tool_count"])
+            group["reasoning_steps"] = _int_value(payload.get("reasoning_steps"), group["reasoning_steps"])
+            group["span_id"] = str(event.get("span_id") or group["span_id"])
+        elif name == "model.call.completed":
+            group["model_calls"] += 1
+            model = str(payload.get("model") or "")
+            provider = str(payload.get("provider") or "")
+            if model or provider:
+                group["models"].add(f"{provider}:{model}".strip(":"))
+        elif name == "model.call.failed":
+            group["model_calls"] += 1
+            group["model_failures"] += 1
+        elif name in {"tool.call.completed", "tool.call.failed"}:
+            group["tool_calls"] += 1
+            tool_name = str(payload.get("tool_name") or "")
+            if tool_name:
+                group["tools"].add(tool_name)
+            if name == "tool.call.failed" or payload.get("status") == "error":
+                group["tool_failures"] += 1
+            if payload.get("status") == "denied":
+                group["tool_denials"] += 1
+    result = []
+    for key in order:
+        group = groups[key]
+        group["models"] = sorted(group["models"])
+        group["tools"] = sorted(group["tools"])
+        result.append(group)
+    return result
+
+
+def _is_subagent_trace_event(event: dict[str, Any]) -> bool:
+    session_id = str(event.get("session_id") or "")
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    return (
+        session_id.startswith("subtask:")
+        or event.get("event") in {"subagent.started", "subagent.completed"}
+        or metadata.get("kind") == "subagent"
+    )
+
+
+def _parent_trace_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        event for event in events or []
+        if not _is_subagent_trace_event(event)
+    ]
+
+
+def _empty_subagent_group(session_id: str) -> dict[str, Any]:
+    return {
+        "session_id": session_id,
+        "agent_type": "",
+        "description": "",
+        "success": None,
+        "truncated": False,
+        "stop_reason": "",
+        "started_at": "",
+        "finished_at": "",
+        "span_id": "",
+        "parent_span_id": "",
+        "prompt_preview": "",
+        "summary_preview": "",
+        "error_preview": "",
+        "reasoning_steps": 0,
+        "model_calls": 0,
+        "model_failures": 0,
+        "tool_calls": 0,
+        "tool_count": 0,
+        "tool_failures": 0,
+        "tool_denials": 0,
+        "event_count": 0,
+        "models": set(),
+        "tools": set(),
+        "events": [],
+    }
+
+
+def _subagent_event_summary(event: dict[str, Any]) -> dict[str, Any]:
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    name = str(event.get("event") or "")
+    return {
+        "timestamp": str(event.get("timestamp") or ""),
+        "step": event.get("step"),
+        "event": name,
+        "span_id": str(event.get("span_id") or ""),
+        "parent_span_id": str(event.get("parent_span_id") or ""),
+        "label": _subagent_event_label(name, payload),
+        "payload": payload,
+    }
+
+
+def _subagent_event_label(name: str, payload: dict[str, Any]) -> str:
+    if name in {"tool.call.completed", "tool.call.failed"}:
+        tool_name = str(payload.get("tool_name") or "tool")
+        status = str(payload.get("status") or ("failed" if name.endswith("failed") else "ok"))
+        preview = str(payload.get("output_preview") or payload.get("error_message") or "")
+        return f"{tool_name} · {status} · {_squash(preview, 160)}"
+    if name in {"model.call.completed", "model.call.failed"}:
+        model = str(payload.get("model") or "")
+        preview = str(payload.get("content_preview") or payload.get("error_message") or "")
+        return f"{model or 'model'} · {_squash(preview, 160)}"
+    if name == "subagent.started":
+        return f"started · {payload.get('description') or payload.get('agent_type') or ''}"
+    if name == "subagent.completed":
+        status = "success" if payload.get("success") else "incomplete"
+        return f"{status} · {_squash(str(payload.get('summary_preview') or payload.get('error_preview') or ''), 160)}"
+    return _squash(json.dumps(payload, ensure_ascii=False, default=str), 180)
+
+
+def _int_value(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default or 0)
+
+
+def _squash(value: str, limit: int) -> str:
+    text = str(value or "").replace("\n", " ").strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _render_subagent_logs(subagents: list[dict[str, Any]]) -> str:
+    if not subagents:
+        return "<p>No subagent trace events recorded for this run.</p>"
+    blocks = []
+    for index, subagent in enumerate(subagents, 1):
+        title = (
+            str(subagent.get("description") or "").strip()
+            or str(subagent.get("agent_type") or "").strip()
+            or f"Subagent {index}"
+        )
+        status = _subagent_status_label(subagent)
+        status_class = _subagent_status_class(subagent)
+        badges = [
+            ("", f"type: {subagent.get('agent_type') or 'unknown'}"),
+            ("", f"steps: {subagent.get('reasoning_steps') or 0}"),
+            ("", f"models: {subagent.get('model_calls') or 0}"),
+            ("", f"tools: {subagent.get('tool_calls') or subagent.get('tool_count') or 0}"),
+        ]
+        if subagent.get("tool_denials"):
+            badges.append(("warn", f"denied: {subagent.get('tool_denials')}"))
+        if subagent.get("stop_reason"):
+            badges.append(("warn", f"stop: {subagent.get('stop_reason')}"))
+        summary_parts = []
+        if subagent.get("prompt_preview"):
+            summary_parts.append(
+                "<div><div class=\"label\">Prompt</div>"
+                f"<pre>{html_escape(str(subagent.get('prompt_preview') or ''))}</pre></div>"
+            )
+        if subagent.get("summary_preview"):
+            summary_parts.append(
+                "<div><div class=\"label\">Summary</div>"
+                f"<pre>{html_escape(str(subagent.get('summary_preview') or ''))}</pre></div>"
+            )
+        if subagent.get("error_preview"):
+            summary_parts.append(
+                "<div><div class=\"label\">Error</div>"
+                f"<pre>{html_escape(str(subagent.get('error_preview') or ''))}</pre></div>"
+            )
+        summary_html = (
+            f"<div class=\"subagent-summary\">{''.join(summary_parts)}</div>"
+            if summary_parts
+            else ""
+        )
+        event_rows = _render_subagent_event_rows(subagent.get("events") or [])
+        blocks.append(
+            "<details class=\"subagent\">"
+            "<summary>"
+            "<div class=\"subagent-title\">"
+            f"<strong>{html_escape(title)}</strong>"
+            f"<span>{html_escape(str(subagent.get('session_id') or ''))}</span>"
+            "</div>"
+            "<div class=\"subagent-meta\">"
+            f"<span class=\"badge {status_class}\">{html_escape(status)}</span>"
+            f"<div>{html_escape(str(subagent.get('started_at') or ''))}</div>"
+            "</div>"
+            "</summary>"
+            "<div class=\"subagent-body\">"
+            "<div class=\"subagent-badges\">"
+            + "".join(
+                f"<span class=\"badge {html_escape(kind)}\">{html_escape(text)}</span>"
+                for kind, text in badges
+            )
+            + "</div>"
+            f"{summary_html}"
+            "<div class=\"subagent-events\">"
+            "<table>"
+            "<thead><tr><th>Time</th><th>Step</th><th>Event</th><th>Log</th><th>Payload</th></tr></thead>"
+            f"<tbody>{event_rows}</tbody>"
+            "</table>"
+            "</div>"
+            "</div>"
+            "</details>"
+        )
+    return f"<div class=\"subagents\">{''.join(blocks)}</div>"
+
+
+def _render_subagent_event_rows(events: list[dict[str, Any]]) -> str:
+    if not events:
+        return '<tr><td colspan="5">No events.</td></tr>'
+    return "\n".join(
+        "<tr>"
+        f"<td>{html_escape(str(event.get('timestamp') or ''))}</td>"
+        f"<td>{html_escape(str(event.get('step') or ''))}</td>"
+        f"<td>{html_escape(str(event.get('event') or ''))}</td>"
+        f"<td>{html_escape(str(event.get('label') or ''))}</td>"
+        "<td><details><summary>payload</summary><pre>"
+        f"{html_escape(json.dumps(event.get('payload') or {}, ensure_ascii=False, indent=2, default=str))}"
+        "</pre></details></td>"
+        "</tr>"
+        for event in events
+    )
+
+
+def _subagent_status_label(subagent: dict[str, Any]) -> str:
+    if subagent.get("success") is True:
+        return "success"
+    if subagent.get("truncated") or subagent.get("stop_reason"):
+        return "incomplete"
+    if subagent.get("success") is False:
+        return "failed"
+    return "running/unknown"
+
+
+def _subagent_status_class(subagent: dict[str, Any]) -> str:
+    if subagent.get("success") is True:
+        return "ok"
+    if subagent.get("truncated") or subagent.get("stop_reason"):
+        return "warn"
+    if subagent.get("success") is False:
+        return "err"
+    return ""
+
+
 def _trace_page(title: str, body: str) -> str:
     escaped_title = html_escape(title)
     return (
@@ -769,6 +1039,18 @@ def _trace_page(title: str, body: str) -> str:
         ".cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:16px 0;}"
         ".card{background:white;border:1px solid #d1d5db;padding:10px;}.label{color:#64748b;font-size:12px;}.value{font-size:18px;font-weight:650;margin-top:4px;}"
         ".error{border-left:4px solid #dc2626;background:#fff7f7;padding:10px;margin:8px 0;}"
+        ".subagents{display:grid;gap:12px;margin:12px 0 20px;}"
+        ".subagent{background:white;border:1px solid #d1d5db;border-radius:8px;overflow:hidden;}"
+        ".subagent>summary{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:12px;cursor:pointer;}"
+        ".subagent-title{display:grid;gap:4px;min-width:0;}.subagent-title strong{font-size:14px;overflow-wrap:anywhere;}"
+        ".subagent-title span,.subagent-meta{color:#64748b;font-size:12px;}.subagent-meta{text-align:right;white-space:nowrap;}"
+        ".subagent-body{border-top:1px solid #e5e7eb;padding:12px;display:grid;gap:12px;}"
+        ".subagent-badges{display:flex;flex-wrap:wrap;gap:6px;}"
+        ".badge{display:inline-flex;align-items:center;min-height:24px;padding:0 8px;border-radius:999px;background:#eef2f7;color:#334155;font-size:12px;}"
+        ".badge.ok{background:#dcfce7;color:#166534;}.badge.warn{background:#fef3c7;color:#92400e;}.badge.err{background:#fee2e2;color:#991b1b;}"
+        ".subagent-summary{background:#f8fafc;border:1px solid #e5e7eb;border-radius:6px;padding:10px;}"
+        ".subagent-events{max-height:520px;overflow:auto;border:1px solid #e5e7eb;border-radius:6px;}"
+        ".subagent-events table{border:0;}"
         "table{border-collapse:collapse;width:100%;background:white;border:1px solid #d1d5db;}"
         "th,td{border-bottom:1px solid #e5e7eb;padding:8px;text-align:left;vertical-align:top;font-size:13px;}"
         "th{background:#eef2f7;font-weight:600;}a{color:#155e75;text-decoration:none;}a:hover{text-decoration:underline;}"
@@ -814,9 +1096,11 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/health":
             user = self._current_user()
+            coding_workspace = _default_coding_workspace()
             self._send_json({
                 "ok": True,
                 "workspace": str(ROOT) if user.role == "admin" else "private workspace",
+                "coding_workspace": str(coding_workspace) if user.role == "admin" else "",
                 "user": {"id": user.user_id, "role": user.role},
                 "runtime": "lazy",
                 "has_env_file": (ROOT / ".env").exists(),
@@ -1008,8 +1292,10 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         metrics = detail["metrics"]
         state = detail["run_state"]
+        subagents = detail.get("subagents") or []
+        parent_events = _parent_trace_events(detail["events"])
         error_events = [
-            event for event in detail["events"]
+            event for event in parent_events
             if str(event.get("event") or "").endswith(".failed")
             or str(event.get("event") or "") in {"run_failed", "model.route.attempts"}
         ]
@@ -1030,7 +1316,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             f"{html_escape(json.dumps(event.get('payload') or {}, ensure_ascii=False, indent=2, default=str))}"
             "</pre></td>"
             "</tr>"
-            for event in detail["events"]
+            for event in parent_events
         )
         body = (
             '<p><a href="/runs">Back to runs</a></p>'
@@ -1042,8 +1328,11 @@ class RequestHandler(BaseHTTPRequestHandler):
             f"<div class=\"card\"><div class=\"label\">Tools</div><div class=\"value\">{html_escape(str(metrics.get('tool_calls', 0)))}</div></div>"
             f"<div class=\"card\"><div class=\"label\">Tokens</div><div class=\"value\">{html_escape(str(metrics.get('total_tokens', 0)))}</div></div>"
             f"<div class=\"card\"><div class=\"label\">Sanitized</div><div class=\"value\">{html_escape(str(metrics.get('sanitized_messages', 0)))}</div></div>"
+            f"<div class=\"card\"><div class=\"label\">Subagents</div><div class=\"value\">{html_escape(str(len(subagents)))}</div></div>"
             "</div>"
             f"{'<h2>Errors</h2>' + error_blocks if error_blocks else ''}"
+            "<h2>Subagents</h2>"
+            f"{_render_subagent_logs(subagents)}"
             "<h2>Metrics</h2>"
             f"<pre>{html_escape(json.dumps(metrics, ensure_ascii=False, indent=2, default=str))}</pre>"
             "<h2>Run State</h2>"
@@ -1661,6 +1950,11 @@ def _env_int(name: str, default: int) -> int:
         return int(value)
     except ValueError:
         return int(default)
+
+
+def _default_coding_workspace() -> Path:
+    raw = os.environ.get("DEFAULT_CODING_WORKSPACE") or str(ROOT)
+    return Path(raw).expanduser().resolve()
 
 
 def main() -> None:

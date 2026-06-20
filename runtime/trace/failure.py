@@ -4,6 +4,12 @@ from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import Any
 
+from runtime.failure_reasons import (
+    StopReason,
+    is_budget_stop_reason,
+    is_loop_guard_stop_reason,
+)
+
 
 class FailureCategory(StrEnum):
     NONE = "none"
@@ -104,16 +110,16 @@ def classify_failure(
             )
         if name == "run_stopped":
             reason = str(payload.get("reason") or "")
-            if reason == "empty_model_response":
+            if reason == StopReason.EMPTY_MODEL_RESPONSE.value:
                 return FailureClassification(
                     FailureCategory.EMPTY_MODEL_RESPONSE,
                     "The run stopped after repeated empty model responses.",
                     [str(payload)[:500]],
                 )
-            if reason in {"reasoning_step_limit", "repeated_tool_call"}:
+            if is_budget_stop_reason(reason) or is_loop_guard_stop_reason(reason):
                 category = (
                     FailureCategory.BUDGET_EXCEEDED
-                    if reason == "reasoning_step_limit"
+                    if is_budget_stop_reason(reason)
                     else FailureCategory.LOOP_GUARD
                 )
                 return FailureClassification(

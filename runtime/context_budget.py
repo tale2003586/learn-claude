@@ -18,7 +18,15 @@ class SectionBudgetRule:
     keep_tail_turns: int = 0
     summary_chars: int = 0
     keep_recent_results: int = 5
-    preserve_tools: tuple[str, ...] = ("read_file", "git_diff", "git_status", "git_log")
+    preserve_tools: tuple[str, ...] = (
+        "read_file",
+        "list_files",
+        "git_diff",
+        "git_status",
+        "git_log",
+        "code_outline",
+        "repo_map",
+    )
 
 
 @dataclass(frozen=True)
@@ -98,7 +106,7 @@ class ContextBudgeter:
                 ),
                 "conversation_history": SectionBudgetRule(
                     name="conversation_history",
-                    budget_chars=_env_int("CONTEXT_CONVERSATION_HISTORY_BUDGET", 10000),
+                    budget_chars=_env_int("CONTEXT_CONVERSATION_HISTORY_BUDGET", 16000),
                     floor_chars=_env_int("CONTEXT_CONVERSATION_HISTORY_FLOOR", 4000),
                     strategy=os.getenv(
                         "CONTEXT_CONVERSATION_HISTORY_STRATEGY",
@@ -120,7 +128,16 @@ class ContextBudgeter:
                     keep_recent_results=_env_int("CONTEXT_ACTIVE_TURN_KEEP_RECENT_RESULTS", 5),
                     preserve_tools=_env_list(
                         "CONTEXT_ACTIVE_TURN_PRESERVE_TOOLS",
-                        ("read_file", "git_diff", "git_status", "git_log"),
+                        (
+                            "read_file",
+                            "list_files",
+                            "rg",
+                            "git_diff",
+                            "git_status",
+                            "git_log",
+                            "code_outline",
+                            "repo_map",
+                        ),
                     ),
                 ),
             },

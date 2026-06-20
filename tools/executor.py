@@ -53,7 +53,11 @@ class ToolHook:
     def before(self, request: ToolExecutionRequest) -> HookOutcome:
         return HookOutcome()
 
-    def after(self, request: ToolExecutionRequest, result: ToolExecutionResult) -> None:
+    def after(
+        self,
+        request: ToolExecutionRequest,
+        result: ToolExecutionResult,
+    ) -> HookOutcome | None:
         return None
 
     def reset_turn(self, session_id: str) -> None:
@@ -143,7 +147,22 @@ class ToolExecutor:
                 ))
                 continue
             try:
-                hook.after(request, result)
+                outcome = hook.after(request, result)
+                if isinstance(outcome, HookOutcome):
+                    if outcome.updated_arguments is not None:
+                        result.final_arguments = dict(outcome.updated_arguments)
+                    if outcome.deny_reason:
+                        result.status = "denied"
+                        result.output = outcome.deny_reason
+                        result.error_type = "ToolDenied"
+                        result.error_message = outcome.deny_reason
+                        result.post_hook_trace.append(HookTraceItem(
+                            hook_name=hook.name,
+                            matched=True,
+                            decision="deny",
+                            reason=outcome.deny_reason,
+                        ))
+                        continue
                 result.post_hook_trace.append(HookTraceItem(
                     hook_name=hook.name,
                     matched=True,

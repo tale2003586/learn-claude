@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Any
 from datetime import datetime
 
 from runtime.trace.events import RUN_STARTED, TraceEvent
 from config import WORKDIR
+from runtime.failure_reasons import INCOMPLETE_STEP_LIMIT_PREFIX
 from runtime.trace.index_store import TraceIndexStore, trace_index_enabled
 from runtime.trace.run_state import RunState, now_iso
 from runtime.trace.summary import write_trace_summary
@@ -17,6 +19,7 @@ class TraceStore:
     def __init__(self, root: str | Path | None = None) -> None:
         self.root = Path(root) if root is not None else WORKDIR / ".runs"
         self.root.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.RLock()
         self.index_store = (
             TraceIndexStore(default_root=self.root)
             if trace_index_enabled()
@@ -56,10 +59,13 @@ class TraceStore:
         ).to_dict()
         run_dir = self.run_dir(run_state)
         run_dir.mkdir(parents=True, exist_ok=True)
-        with (run_dir / "trace.jsonl").open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
+        with self._lock:
+            with (run_dir / "trace.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
 
     def write_run_state(self, run_state: RunState) -> None:
+        if (run_state.metadata or {}).get("trace_only"):
+            return
         self._write_json_atomic(
             self.run_dir(run_state) / "run_state.json",
             run_state.to_dict(),
@@ -95,14 +101,15 @@ class TraceStore:
         return self.root / run_id
 
     def _write_json_atomic(self, path: Path, payload: dict[str, Any]) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = path.with_suffix(path.suffix + ".tmp")
-        tmp_path.write_text(
-            json.dumps(_json_safe(payload), indent=2, ensure_ascii=False, default=str)
-            + "\n",
-            encoding="utf-8",
-        )
-        os.replace(tmp_path, path)
+        with self._lock:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = path.with_suffix(path.suffix + ".tmp")
+            tmp_path.write_text(
+                json.dumps(_json_safe(payload), indent=2, ensure_ascii=False, default=str)
+                + "\n",
+                encoding="utf-8",
+            )
+            os.replace(tmp_path, path)
 
     def _index_run(self, run_state: RunState) -> None:
         if self.index_store is None:
@@ -149,6 +156,11 @@ class TraceStore:
             "model_retry_count": 0,
             "model_route_attempts": 0,
             "sanitized_messages": 0,
+            "duplicate_tool_call_ratio": 0.0,
+            "duplicate_tool_call_count": 0,
+            "truncated_tool_output_count": 0,
+            "subagent_incomplete_count": 0,
+            "subagent_fanout_count": 0,
             "run_duration_ms": _duration_ms(run_state.started_at, run_state.finished_at),
             "models": [],
             "tools": [],
@@ -160,6 +172,8 @@ class TraceStore:
 
         models: set[str] = set()
         tools: set[str] = set()
+        seen_tool_calls: set[str] = set()
+        duplicate_tool_calls = 0
         for line in trace_path.read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
@@ -204,6 +218,20 @@ class TraceStore:
                 tool_name = str(payload.get("tool_name") or "").strip()
                 if tool_name:
                     tools.add(tool_name)
+                if payload.get("truncated_output"):
+                    metrics["truncated_tool_output_count"] += 1
+                if tool_name == "parallel_tasks":
+                    metrics["subagent_fanout_count"] += 1
+                    metrics["subagent_incomplete_count"] += (
+                        _int(payload.get("subagent_incomplete_count"))
+                        or _subagent_incomplete_count(payload.get("output_preview"))
+                    )
+                fingerprint = _tool_call_fingerprint(payload)
+                if fingerprint:
+                    if fingerprint in seen_tool_calls:
+                        duplicate_tool_calls += 1
+                    else:
+                        seen_tool_calls.add(fingerprint)
             elif name == "tool.call.failed":
                 metrics["tool_calls"] += 1
                 metrics["tool_failures"] += 1
@@ -211,9 +239,21 @@ class TraceStore:
                 tool_name = str(payload.get("tool_name") or "").strip()
                 if tool_name:
                     tools.add(tool_name)
+                fingerprint = _tool_call_fingerprint(payload)
+                if fingerprint:
+                    if fingerprint in seen_tool_calls:
+                        duplicate_tool_calls += 1
+                    else:
+                        seen_tool_calls.add(fingerprint)
 
         metrics["total_model_duration_ms"] = round(metrics["total_model_duration_ms"], 3)
         metrics["total_tool_duration_ms"] = round(metrics["total_tool_duration_ms"], 3)
+        metrics["duplicate_tool_call_count"] = duplicate_tool_calls
+        metrics["duplicate_tool_call_ratio"] = (
+            round(duplicate_tool_calls / metrics["tool_calls"], 4)
+            if metrics["tool_calls"]
+            else 0.0
+        )
         metrics["models"] = sorted(models)
         metrics["tools"] = sorted(tools)
         return metrics
@@ -229,6 +269,31 @@ def event_preview(value: Any, *, limit: int = 500) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + "...[truncated]"
+
+
+def _tool_call_fingerprint(payload: dict[str, Any]) -> str:
+    tool_name = str(payload.get("tool_name") or "").strip()
+    args = str(payload.get("final_arguments_preview") or "").strip()
+    if not tool_name:
+        return ""
+    return json.dumps(
+        {
+            "tool": tool_name,
+            "arguments": args,
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+
+
+def _subagent_incomplete_count(output_preview: Any) -> int:
+    text = str(output_preview or "")
+    if not text:
+        return 0
+    count = text.count('"truncated": true')
+    count += text.count('"incomplete": true')
+    count += text.count(INCOMPLETE_STEP_LIMIT_PREFIX)
+    return count
 
 
 def _request_id_for(run_state: RunState) -> str:

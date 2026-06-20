@@ -7,6 +7,14 @@ from typing import Any
 from runtime.context_budget import SectionBudgetRule
 
 
+LATEST_RESULT_PROTECTED_TOOLS = {
+    "read_file",
+    "repo_map",
+    "code_outline",
+    "list_files",
+}
+
+
 @dataclass(frozen=True)
 class BudgetedMessages:
     name: str
@@ -376,15 +384,21 @@ def _compress_old_tool_results(
         if isinstance(message, dict) and str(message.get("role") or "") == "tool"
     ]
     recent_keep = set(tool_indexes[-keep_recent:]) if keep_recent else set()
+    latest_protected = _latest_tool_result_indexes(
+        rendered,
+        tool_indexes,
+        tool_names,
+        LATEST_RESULT_PROTECTED_TOOLS,
+    )
     compressed = 0
     for index in tool_indexes:
         message = rendered[index]
         tool_id = str(message.get("tool_call_id") or "")
         tool_name = tool_names.get(tool_id, "unknown_tool")
-        if index in recent_keep or tool_name in preserve_tools:
+        if index in recent_keep or index in latest_protected or tool_name in preserve_tools:
             continue
         content = _message_text(message)
-        placeholder = f"<{tool_name} result compressed for context budget>"
+        placeholder = _compressed_tool_placeholder(tool_name, message)
         if content == placeholder:
             continue
         message["content"] = placeholder
@@ -395,6 +409,80 @@ def _compress_old_tool_results(
         }
         compressed += 1
     return rendered, compressed
+
+
+def _latest_tool_result_indexes(
+    messages: list[dict[str, Any]],
+    indexes: list[int],
+    tool_names: dict[str, str],
+    protected_tools: set[str],
+) -> set[int]:
+    latest: dict[str, int] = {}
+    for index in indexes:
+        message = messages[index]
+        tool_id = str(message.get("tool_call_id") or "")
+        tool_name = tool_names.get(tool_id, "unknown_tool")
+        if tool_name in protected_tools:
+            latest[tool_name] = index
+    return set(latest.values())
+
+
+def _compressed_tool_placeholder(tool_name: str, message: dict[str, Any]) -> str:
+    if tool_name in {"read_file", "storage_read_file", "sandbox_read_file"}:
+        args = message.get("final_arguments") if isinstance(message.get("final_arguments"), dict) else {}
+        path = str(args.get("path") or "")
+        offset = args.get("offset", 0)
+        limit = args.get("limit")
+        if path:
+            limit_part = f", limit={limit}" if limit not in (None, "") else ""
+            return (
+                f"<{tool_name} result compressed for context budget; "
+                f"path={path}; offset={offset}{limit_part}; "
+                f"re-read with {tool_name}(path=\"{path}\", offset={offset}{limit_part})>"
+            )
+    if tool_name in {"list_files", "storage_list_files", "sandbox_list_files"}:
+        args = message.get("final_arguments") if isinstance(message.get("final_arguments"), dict) else {}
+        path = str(args.get("path") or ".")
+        offset = args.get("offset", 0)
+        recursive = args.get("recursive")
+        if path:
+            recursive_part = f", recursive={bool(recursive)}" if recursive is not None else ""
+            return (
+                f"<{tool_name} result compressed for context budget; "
+                f"path={path}; offset={offset}; "
+                f"re-list with {tool_name}(path=\"{path}\"{recursive_part}, offset={offset})>"
+            )
+    if tool_name == "repo_map":
+        args = message.get("final_arguments") if isinstance(message.get("final_arguments"), dict) else {}
+        path = str(args.get("path") or ".")
+        offset = args.get("offset", 0)
+        max_depth = args.get("max_depth")
+        include_lines = args.get("include_lines")
+        if path:
+            max_depth_part = f", max_depth={max_depth}" if max_depth not in (None, "") else ""
+            include_part = (
+                f", include_lines={bool(include_lines)}"
+                if include_lines is not None
+                else ""
+            )
+            return (
+                f"<repo_map result compressed for context budget; "
+                f"path={path}; offset={offset}{max_depth_part}{include_part}; "
+                f"re-map with repo_map(path=\"{path}\"{max_depth_part}{include_part}, offset={offset})>"
+            )
+    if tool_name == "code_outline":
+        args = message.get("final_arguments") if isinstance(message.get("final_arguments"), dict) else {}
+        path = str(args.get("path") or "")
+        offset = args.get("offset", 0)
+        limit = args.get("limit")
+        if path:
+            limit_part = f", limit={limit}" if limit not in (None, "") else ""
+            return (
+                f"<code_outline result compressed for context budget; "
+                f"path={path}; offset={offset}{limit_part}; "
+                f"re-outline with code_outline(path=\"{path}\", offset={offset}{limit_part})>"
+            )
+    return f"<{tool_name} result compressed for context budget>"
 
 
 def _group_turns(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:

@@ -30,6 +30,31 @@ class ToolSafetyTests(unittest.TestCase):
         self.assertEqual("denied", outputs[2].status)
         self.assertIn("same tool", outputs[2].output)
 
+    def test_tool_loop_guard_blocks_repeated_read_results(self) -> None:
+        executor = ToolExecutor([ToolLoopGuardHook(result_repeat_limit=3)])
+
+        outputs = []
+        for index in range(3):
+            result = executor.execute(
+                ToolExecutionRequest(
+                    call_id=f"call-{index}",
+                    tool_name="read_file",
+                    arguments={"path": f"{index}.py"},
+                    session_id="web:test",
+                ),
+                lambda _name, _args: "same file view",
+            )
+            outputs.append(result)
+
+        self.assertEqual("success", outputs[0].status)
+        self.assertEqual("success", outputs[1].status)
+        self.assertEqual("denied", outputs[2].status)
+        self.assertIn("no-information-gain", outputs[2].output)
+        self.assertTrue(any(
+            item.hook_name == "tool_loop_guard" and item.decision == "deny"
+            for item in outputs[2].post_hook_trace
+        ))
+
     def test_shell_safety_blocks_high_risk_commands(self) -> None:
         executor = ToolExecutor([ShellSafetyHook()])
         risky_commands = [

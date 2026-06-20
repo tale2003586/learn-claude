@@ -17,7 +17,7 @@
 - `knowledge/chunking/`
 - `knowledge/incremental.py`
 - `knowledge/caching.py`
-- `knowledge/rerank.py`
+- `knowledge/reranker.py`
 - `knowledge/tracing.py`
 - `retrieval/security_router.py`
 - `plugins/security_rag/plugin.py`
@@ -170,6 +170,26 @@ hybrid 的核心思想是：
 
 这类场景只靠 dense embedding 容易漂移，所以 hybrid 对安全资料更合适。
 
+## 检索缓存和 Reranker
+
+`build_security_index_from_env()` 默认会在 `SecurityKnowledgeIndex` 外面包一层 `CachedSecurityIndex`：
+
+```text
+SECURITY_RAG_CACHE_ENABLED=1
+SECURITY_RAG_CACHE_MAX_SIZE=512
+SECURITY_RAG_CACHE_TTL_SECONDS=3600
+```
+
+这是进程内 TTL cache，key 由 query 和检索参数生成。cache 命中时仍会通过 trace callback 标记 `cache_hit`，但它不是持久缓存，进程重启后会清空。
+
+如果开启：
+
+```text
+SECURITY_RAG_RERANKER_ENABLED=1
+```
+
+系统会从 `knowledge/reranker.py` 构造 `RerankerProvider`，默认模型是 `BAAI/bge-reranker-v2-m3`。reranker 会先对更多候选打分，再返回 top_k；它是可选增强，不影响 dense/hybrid 检索主链路。
+
 ## Incremental Ingest
 
 增量索引状态由 `knowledge/incremental.py` 维护。
@@ -272,6 +292,7 @@ python scripts/eval_security_rag.py \
 当前安全 RAG 已经支持结构化切片、Qdrant、BGE-M3、hybrid 检索、路由和 agent 工具接入，但仍有边界：
 
 - hybrid 需要 collection schema 支持 sparse vectors，旧 collection 不能自动变成 hybrid。
+- cache 是进程内 TTL cache，不是跨进程共享缓存。
 - reranker 是可选增强，不是强依赖。
 - RAG 只覆盖导入的安全知识源，不等于互联网搜索。
 - 自动上下文每个用户 turn 只触发一次，后续需要模型主动调用工具。

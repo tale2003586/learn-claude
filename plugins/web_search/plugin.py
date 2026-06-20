@@ -13,7 +13,12 @@ class WebSearchPlugin(Plugin):
             ToolRegistration(
                 schema=function_tool(
                     "web_search",
-                    "Search the public web for current information. Return sources with URLs.",
+                    (
+                        "Search the public web for current information. Return sources with URLs. "
+                        "This tool has a per-turn runtime budget; each result begins with a "
+                        "web-search-budget notice showing remaining calls. Consolidate queries "
+                        "and do not call this tool again when the notice says remaining=0."
+                    ),
                     {
                         "query": {
                             "type": "string",

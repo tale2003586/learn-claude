@@ -1,5 +1,6 @@
 
 from collections import deque
+import hashlib
 import json
 import re
 import time
@@ -99,15 +100,18 @@ class ToolLoopGuardHook(ToolHook):
 
     def __init__(
         self,
-        repeat_limit: int = 3,
+        repeat_limit: int = 20,
         window_size: int = 6,
-        tool_repeat_limit: int = 6,
+        tool_repeat_limit: int = 60,
+        result_repeat_limit: int = 3,
     ) -> None:
         self.repeat_limit = max(2, repeat_limit)
-        self.tool_repeat_limit = max(self.repeat_limit, int(tool_repeat_limit))
+        self.tool_repeat_limit = max(2, int(tool_repeat_limit))
         self.window_size = max(self.tool_repeat_limit, window_size)
+        self.result_repeat_limit = max(2, int(result_repeat_limit))
         self._recent: dict[str, deque[str]] = {}
         self._recent_tools: dict[str, deque[str]] = {}
+        self._result_hash_counts: dict[str, dict[str, int]] = {}
 
     def matches(self, request: ToolExecutionRequest) -> bool:
         return True
@@ -137,9 +141,38 @@ class ToolLoopGuardHook(ToolHook):
             )
         return HookOutcome()
 
+    def after(
+        self,
+        request: ToolExecutionRequest,
+        result: ToolExecutionResult,
+    ) -> HookOutcome | None:
+        if request.tool_name not in _RESULT_HASH_TOOLS:
+            return None
+        if result.status != "success":
+            return None
+        output_hash = _output_hash(result.output)
+        if not output_hash:
+            return None
+        key = request.session_id or "_global"
+        counts = self._result_hash_counts.setdefault(key, {})
+        count = counts.get(output_hash, 0) + 1
+        counts[output_hash] = count
+        if count >= self.result_repeat_limit:
+            return HookOutcome(
+                deny_reason=(
+                    "Error: Repeated no-information-gain tool result blocked by "
+                    "tool_loop_guard. You have already received the same read/list "
+                    "result multiple times; continue with the offset suggested by "
+                    "the previous result, inspect a different path, or summarize "
+                    "the available information and provide a conclusion."
+                )
+            )
+        return None
+
     def reset_turn(self, session_id: str) -> None:
         self._recent.pop(session_id or "_global", None)
         self._recent_tools.pop(session_id or "_global", None)
+        self._result_hash_counts.pop(session_id or "_global", None)
 
     def _fingerprint(self, request: ToolExecutionRequest) -> str:
         return json.dumps(
@@ -151,6 +184,27 @@ class ToolLoopGuardHook(ToolHook):
             ensure_ascii=False,
             default=str,
         )
+
+
+_RESULT_HASH_TOOLS = {
+    "list_files",
+    "rg",
+    "read_file",
+    "storage_list_files",
+    "storage_read_file",
+    "sandbox_list_files",
+    "sandbox_read_file",
+}
+
+
+def _output_hash(output: str) -> str:
+    normalized = str(output or "")
+    if normalized.startswith("[tool-cache] already read at step "):
+        normalized = normalized.split("\n", 1)[1] if "\n" in normalized else ""
+    normalized = normalized.strip()
+    if not normalized:
+        return ""
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 class ToolTraceHook(ToolHook):

@@ -3,11 +3,21 @@ from bus.team_bus import BUS
 from runtime.agent_runner import AgentRunner
 from runtime.agent_spec import AgentSpec
 from runtime.context import ContextBundle
-from runtime.reasoning_loop import DEFAULT_MAX_REASONING_STEPS
+from runtime.failure_reasons import (
+    REASONING_LOOP_STOP_MESSAGE_KEY,
+    REASONING_LOOP_STOP_REASON_KEY,
+)
+from runtime.reasoning_loop import (
+    DEFAULT_MAX_REASONING_STEPS,
+)
 from typing import Callable
 
 
 SECURITY_RAG_AUTO_CONTEXT_USED_KEY = "security_rag_auto_context_used"
+WEB_SEARCH_BUDGET_LIMIT_KEY = "web_search_budget_limit"
+WEB_SEARCH_BUDGET_USED_KEY = "web_search_budget_used"
+WEB_SEARCH_BUDGET_REMAINING_KEY = "web_search_budget_remaining"
+DEFAULT_WEB_SEARCH_BUDGET = 6
 
 
 class Pipeline:
@@ -54,6 +64,7 @@ class Pipeline:
         *,
         context_builder,
         memory_lifecycle=None,
+        max_reasoning_steps: int | None = None,
     ) -> "Pipeline":
         return Pipeline(
             tools=self.agent_runner.tools,
@@ -65,7 +76,7 @@ class Pipeline:
             model_pool=self.agent_runner.model_pool,
             reflection_agent=self.agent_runner.reflection_agent,
             max_tokens=self.agent_runner.max_tokens,
-            max_reasoning_steps=self.agent_runner.max_reasoning_steps,
+            max_reasoning_steps=max_reasoning_steps or self.agent_runner.max_reasoning_steps,
         )
 
     def provider_and_model_for(self, purpose: str = "chat"):
@@ -78,6 +89,7 @@ class Pipeline:
         on_text: Callable[[str], None] | None = None,
         run_state=None,
         trace_store=None,
+        trace_parent_span_id: str | None = None,
     ) -> str:
         self._run_turn(
             session,
@@ -85,6 +97,7 @@ class Pipeline:
             on_text=on_text,
             run_state=run_state,
             trace_store=trace_store,
+            trace_parent_span_id=trace_parent_span_id,
         )
         return get_last_assistant_text(session.messages)
 
@@ -95,6 +108,7 @@ class Pipeline:
         on_text: Callable[[str], None] | None = None,
         run_state=None,
         trace_store=None,
+        trace_parent_span_id: str | None = None,
     ) -> None:
         active_turn_start_index = _last_user_message_index(session.messages)
         self._before_turn(session)
@@ -114,11 +128,17 @@ class Pipeline:
             on_text=on_text,
             run_state=run_state,
             trace_store=trace_store,
+            trace_parent_span_id=trace_parent_span_id,
         )
 
     def _before_turn(self, session) -> None:
         self.agent_runner.reset_turn_state(session)
+        session.metadata.pop(REASONING_LOOP_STOP_REASON_KEY, None)
+        session.metadata.pop(REASONING_LOOP_STOP_MESSAGE_KEY, None)
         session.metadata[SECURITY_RAG_AUTO_CONTEXT_USED_KEY] = False
+        session.metadata[WEB_SEARCH_BUDGET_LIMIT_KEY] = DEFAULT_WEB_SEARCH_BUDGET
+        session.metadata[WEB_SEARCH_BUDGET_USED_KEY] = 0
+        session.metadata[WEB_SEARCH_BUDGET_REMAINING_KEY] = DEFAULT_WEB_SEARCH_BUDGET
 
     def _before_reasoning(self, session, profile, *, active_turn_start_index=None):
         if self._should_include_task_runtime_events(session, profile):
@@ -183,20 +203,24 @@ class Pipeline:
 
     def _after_turn(self, session, *, run_state=None, trace_store=None) -> None:
         if self.memory_lifecycle is not None:
-            result = self.memory_lifecycle.after_turn(session)
-            if trace_store is not None and run_state is not None and result is not None:
-                for item in getattr(result, "trace_events", []) or []:
-                    event_name = item.get("event")
-                    payload = item.get("payload") or {}
-                    if event_name:
-                        trace_store.append_event(run_state, event_name, payload)
-                trace_store.append_event(
-                    run_state,
-                    "memory.lifecycle.completed",
-                    result.to_trace_payload()
-                    if hasattr(result, "to_trace_payload")
-                    else {},
-                )
+            enqueue = getattr(self.memory_lifecycle, "enqueue_after_turn", None)
+            if enqueue is not None:
+                enqueue(session, run_state=run_state, trace_store=trace_store)
+            else:
+                result = self.memory_lifecycle.after_turn(session)
+                if trace_store is not None and run_state is not None and result is not None:
+                    for item in getattr(result, "trace_events", []) or []:
+                        event_name = item.get("event")
+                        payload = item.get("payload") or {}
+                        if event_name:
+                            trace_store.append_event(run_state, event_name, payload)
+                    trace_store.append_event(
+                        run_state,
+                        "memory.lifecycle.completed",
+                        result.to_trace_payload()
+                        if hasattr(result, "to_trace_payload")
+                        else {},
+                    )
         session.touch()
 
     def _should_include_task_runtime_events(self, session, profile) -> bool:

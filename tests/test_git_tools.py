@@ -102,6 +102,80 @@ class GitToolTests(unittest.TestCase):
             escaped = handlers.run_list_files("../outside", _session=session)
             self.assertIn("Path escapes workspace", escaped)
 
+    def test_read_file_offset_returns_continuation_hint_and_cache_notice(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "project"
+            workspace.mkdir()
+            (workspace / "long.txt").write_text(
+                "\n".join(f"line {index}" for index in range(5)),
+                encoding="utf-8",
+            )
+            session = _session_for(workspace)
+
+            first = handlers.run_read("long.txt", limit=2, _session=session)
+            self.assertIn("line 0", first)
+            self.assertIn("line 1", first)
+            self.assertIn("offset=2", first)
+            self.assertIn("3 lines remain", first)
+
+            second = handlers.run_read("long.txt", limit=2, offset=2, _session=session)
+            self.assertIn("line 2", second)
+            self.assertIn("line 3", second)
+            self.assertIn("offset=4", second)
+
+            cached = handlers.run_read("long.txt", limit=2, offset=2, _session=session)
+            self.assertIn("[tool-cache] already read at step", cached)
+            self.assertIn("line 2", cached)
+
+    def test_subagent_large_read_returns_outline_hint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "project"
+            workspace.mkdir()
+            (workspace / "large.py").write_text(
+                "\n".join(f"line {index}" for index in range(350)),
+                encoding="utf-8",
+            )
+            session = _session_for(workspace)
+            session.metadata["kind"] = "subagent"
+
+            output = handlers.run_read("large.py", _session=session)
+
+            self.assertIn("large file guard", output)
+            self.assertIn('code_outline(path="large.py")', output)
+            self.assertIn("offset=80", output)
+
+    def test_parent_large_read_is_not_outline_guarded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "project"
+            workspace.mkdir()
+            (workspace / "large.py").write_text(
+                "\n".join(f"line {index}" for index in range(350)),
+                encoding="utf-8",
+            )
+            session = _session_for(workspace)
+
+            output = handlers.run_read("large.py", _session=session)
+
+            self.assertNotIn("large file guard", output)
+            self.assertIn("line 300", output)
+
+    def test_list_files_offset_paginates_large_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "project"
+            workspace.mkdir()
+            for index in range(505):
+                (workspace / f"file_{index:03d}.txt").write_text("x", encoding="utf-8")
+            session = _session_for(workspace)
+
+            first = handlers.run_list_files(".", offset=0, _session=session)
+            self.assertIn('"truncated": true', first)
+            self.assertIn('"next_offset": 500', first)
+            self.assertIn("offset=500", first)
+
+            second = handlers.run_list_files(".", offset=500, _session=session)
+            self.assertIn('"truncated": false', second)
+            self.assertIn("file_504.txt", second)
+
     def test_shell_workspace_scope_blocks_external_cd(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp) / "project"

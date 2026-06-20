@@ -105,8 +105,11 @@ def safe_workspace_path(path: str, *, session=None) -> Path:
     if session is None:
         raise ValueError("safe_workspace_path requires a session.")
     root = workspace_root_for_session(session).resolve()
-    relative = Path(str(path or "").strip())
-    if relative.is_absolute() or ".." in relative.parts:
+    raw_path = str(path or "").strip()
+    relative = Path(raw_path)
+    if relative.is_absolute():
+        raise ValueError(_absolute_path_error(relative, root, raw_path))
+    if ".." in relative.parts:
         raise ValueError(f"Path escapes workspace: {path}")
     target = (root / relative).resolve()
     if target != root and not target.is_relative_to(root):
@@ -116,3 +119,17 @@ def safe_workspace_path(path: str, *, session=None) -> Path:
 
 def _resolve_path(path: str | Path) -> Path:
     return Path(path).expanduser().resolve()
+
+
+def _absolute_path_error(path: Path, root: Path, raw_path: str) -> str:
+    try:
+        resolved = path.expanduser().resolve()
+    except OSError:
+        resolved = path.expanduser()
+    if resolved == root:
+        hint = "Use '.' for the workspace root."
+    elif resolved.is_relative_to(root):
+        hint = f"Use relative path '{resolved.relative_to(root).as_posix()}'."
+    else:
+        hint = "Use a relative path under the current workspace."
+    return f"Absolute workspace paths are not allowed: {raw_path}. {hint}"

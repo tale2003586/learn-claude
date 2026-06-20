@@ -2,7 +2,7 @@ import os
 
 from bus.user_bus import MessageBus
 from coding_runtime.teammate import TEAM
-from config import MODEL_HEALTHCHECK_PURPOSES, WORKDIR
+from config import MODEL_HEALTHCHECK_PURPOSES, SUBAGENT_MAX_REASONING_STEPS, WORKDIR
 from models.model_pool import build_model_pool_from_env
 from runtime.agent_loop import AgentLoop
 from runtime.context import ContextBuilder
@@ -12,6 +12,7 @@ from runtime.pipeline import Pipeline
 from runtime.reflection import ReflectionAgent
 from runtime.app_runtime import AppRuntime
 from runtime.env_loader import load_dotenv_file
+from runtime.background_memory import BackgroundMemoryLifecycle
 from runtime.trace.trace_store import TraceStore
 from tools.hooks import FileWriteScopeHook, ToolLoopGuardHook, ToolTraceHook
 from tools.executor import ToolExecutor
@@ -183,6 +184,11 @@ def build_runtime() -> AppRuntime:
         promotion_confidence=_env_float("MEMORY_CANDIDATE_PROMOTION_CONFIDENCE", 0.85),
         promotion_evidence_count=_env_int("MEMORY_CANDIDATE_PROMOTION_EVIDENCE_COUNT", 3),
     )
+    if _env_bool("MEMORY_LIFECYCLE_BACKGROUND", True):
+        memory_lifecycle = BackgroundMemoryLifecycle(
+            memory_lifecycle,
+            max_workers=_env_int("MEMORY_LIFECYCLE_BACKGROUND_WORKERS", 1),
+        )
 
     plugin_manager = PluginManager(
         [
@@ -201,7 +207,7 @@ def build_runtime() -> AppRuntime:
 
     executor = ToolExecutor([
         FileWriteScopeHook(),
-        ToolLoopGuardHook(),
+        #ToolLoopGuardHook(),
         ToolTraceHook(),
         *plugin_manager.tool_hooks,
     ])
@@ -241,7 +247,10 @@ def build_runtime() -> AppRuntime:
     )
     subagent_runner = TaskSubagentRunner(
         base_pipeline=pipeline,
-        max_reasoning_steps=_env_int("SUBAGENT_MAX_REASONING_STEPS", 12),
+        max_reasoning_steps=_env_int(
+            "SUBAGENT_MAX_REASONING_STEPS",
+            SUBAGENT_MAX_REASONING_STEPS,
+        ),
     )
     configure_subagent_runner(subagent_runner)
 
@@ -264,17 +273,11 @@ def build_runtime() -> AppRuntime:
 
 def _configure_proxy_from_env() -> None:
     use_local_proxy = os.getenv("USE_LOCAL_PROXY", "1").lower() not in {"0", "false", "no"}
-    if use_local_proxy:
-        proxy_url = os.getenv("LOCAL_PROXY_URL", "http://127.0.0.1:7897")
-        os.environ["HTTPS_PROXY"] = proxy_url
-        os.environ["HTTP_PROXY"] = proxy_url
-    else:
-        os.environ.pop("HTTPS_PROXY", None)
-        os.environ.pop("HTTP_PROXY", None)
-        os.environ.pop("https_proxy", None)
-        os.environ.pop("http_proxy", None)
-    os.environ.pop("ALL_PROXY", None)
-    os.environ.pop("all_proxy", None)
+    if not use_local_proxy:
+        return
+    proxy_url = os.getenv("LOCAL_PROXY_URL", "http://127.0.0.1:7897")
+    for key in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy"):
+        os.environ[key] = proxy_url
 
 
 def _env_int(name: str, default: int) -> int:

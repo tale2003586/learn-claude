@@ -105,6 +105,7 @@ record = self.factory.create(
 
 - 父 session 保存用户请求和最终摘要。
 - task session 保存 coding 中间消息、工具结果和 task-local memory。
+- 父 run 的 `run_state.metadata["task_session"]` 会记录 task id、task session id 和任务状态。
 
 这样 coding 的探索过程不会把主聊天上下文弄得很长，也不会直接污染主 session。
 
@@ -155,6 +156,25 @@ task_pipeline = self.base_pipeline.fork(
 
 如果传入了 `run_state` 和 `trace_store`，coding task 会记录 workspace 改动。
 
+task session 启动时会先写：
+
+```text
+workspace.resolved
+task_session_started
+```
+
+同时把父 run metadata 更新成：
+
+```json
+{
+  "task_session": {
+    "task_id": "coding-...",
+    "task_session_id": "task:coding-...",
+    "status": "running"
+  }
+}
+```
+
 开始前：
 
 ```python
@@ -178,12 +198,26 @@ diff 能覆盖：
 - modified
 - deleted
 
+task 完成后，父 run metadata 会更新为 task 报告，包括：
+
+- `task_id`
+- `task_session_id`
+- `status`
+- `task_log_path`
+- `conclusions_path`
+- `promoted_count`
+- `skipped_count`
+- `rejected_count`
+- `workspace_diff`
+
+同时 trace 会写 `task_session_completed`。如果后续要补失败路径，应保持同样的父 run metadata 边界，避免只在 task session 内部留下状态。
+
 ## task artifacts
 
 任务完成后会尝试写 task artifacts：
 
-- task log
-- conclusions
+- `TASK_LOG.md`
+- `CONCLUSIONS.json`
 
 路径会写入 task session metadata：
 
@@ -226,4 +260,3 @@ promotion = TaskMemoryPromoter(global_memory).promote(...)
 coding 功能的核心不是给普通聊天加写文件工具，而是建立一个隔离 task session，并把真实 workspace 绑定到这个 task。
 
 `WorkspaceResolver` 管入口安全，文件工具管路径安全，task session 管上下文隔离，trace/workspace diff 管执行证据。
-

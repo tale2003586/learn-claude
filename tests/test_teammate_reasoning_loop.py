@@ -35,6 +35,7 @@ class TeammateToolRegistryTests(unittest.TestCase):
         visible = registry.visible_names_for_turn(session, "teammate")
 
         self.assertIn("idle", visible)
+        self.assertIn("rg", visible)
         self.assertIn("read_file", visible)
         self.assertIn("send_message", visible)
         self.assertIn("tool_search", visible)

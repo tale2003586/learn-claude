@@ -1,10 +1,47 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 from runtime.trace.failure import FailureClassification, classify_failure
+from runtime.failure_reasons import SUBAGENT_TERMINAL_REASONS
+
+
+EVIDENCE_GATHERING_TOOLS = {
+    "bash",
+    "rg",
+    "grep",
+    "nl",
+    "read_file",
+    "list_files",
+    "repo_map",
+    "code_outline",
+    "git_status",
+    "git_diff",
+    "git_log",
+}
+
+COMPLETION_DECLARATION_PATTERNS = (
+    r"已(?:经)?(?:补齐|完成|覆盖).*(?:主链路|核心|线索|任务|reasoning|工具执行)",
+    r"(?:主链路|核心.*链路|required clues).*(?:已|已经).*(?:补齐|完成|覆盖)",
+    r"现在(?:给出|直接)?(?:最终)?总结",
+    r"直接(?:总结|给出结论|收尾)",
+    r"可以(?:总结|收尾|给出最终答案)",
+    r"\bready to (?:answer|summari[sz]e|finalize)\b",
+    r"\b(?:now|next).*(?:final answer|summary)\b",
+    r"\b(?:core|main).*(?:complete|covered)\b",
+)
+
+COMPLETION_NEGATION_PATTERNS = (
+    r"未完成",
+    r"尚未",
+    r"还没有",
+    r"不能.*(?:总结|收尾|完成)",
+    r"\bnot (?:complete|ready|covered)\b",
+    r"\binsufficient\b",
+)
 
 
 def write_trace_summary(run_dir: Path, *, external_logs: list[str] | None = None) -> tuple[Path, Path]:
@@ -54,7 +91,9 @@ def build_trace_summary_payload(
     file_summary = _file_summary(events)
     verification = _verification_summary(report)
     multi_agent = _multi_agent_summary(events)
+    subagents = _subagent_summary(events)
     memory = _memory_summary(events)
+    perfectionism = _perfectionism_summary(events)
     timeline = _tool_timeline(events)
     execution_path = _execution_path(events, run_state)
     return {
@@ -72,6 +111,19 @@ def build_trace_summary_payload(
             "model_failures": metrics.get("model_failures", 0),
             "tool_failures": metrics.get("tool_failures", 0),
             "tool_denials": metrics.get("tool_denials", 0),
+            "duplicate_tool_call_ratio": metrics.get("duplicate_tool_call_ratio", 0),
+            "truncated_tool_output_count": metrics.get("truncated_tool_output_count", 0),
+            "post_completion_tool_calls": perfectionism["post_completion_tool_calls"],
+            "evidence_gathering_steps": perfectionism["evidence_gathering_steps"],
+            "subagent_incomplete_count": metrics.get("subagent_incomplete_count", 0),
+            "subagent_fanout_count": metrics.get("subagent_fanout_count", 0),
+            "subagent_retry_count": subagents["retry_count"],
+            "subagent_degrade_count": subagents["degrade_count"],
+            "fanout_rejected_count": subagents["fanout_rejected_count"],
+            "dispatch_rejected_count": subagents["dispatch_rejected_count"],
+            "subagent_missing_file_count": subagents["missing_file_count"],
+            "subagent_infeasible_count": subagents["infeasible_count"],
+            "subagent_recovered_count": subagents["recovered_count"],
             "total_tokens": metrics.get("total_tokens", 0),
             "duration_ms": metrics.get("run_duration_ms", 0),
         },
@@ -117,6 +169,19 @@ def render_trace_summary_markdown(summary: dict[str, Any]) -> str:
         f"- Model Calls: {_value(metrics.get('model_calls'))}",
         f"- Tool Calls: {_value(metrics.get('tool_calls'))}",
         f"- Tool Denials: {_value(metrics.get('tool_denials'))}",
+        f"- Duplicate Tool Call Ratio: {_value(metrics.get('duplicate_tool_call_ratio'))}",
+        f"- Truncated Tool Outputs: {_value(metrics.get('truncated_tool_output_count'))}",
+        f"- Post-completion Tool Calls: {_value(metrics.get('post_completion_tool_calls'))}",
+        f"- Evidence Gathering Steps: {_value(metrics.get('evidence_gathering_steps'))}",
+        f"- Subagent Incomplete: {_value(metrics.get('subagent_incomplete_count'))}",
+        f"- Subagent Fan-out: {_value(metrics.get('subagent_fanout_count'))}",
+        f"- Subagent Retries: {_value(metrics.get('subagent_retry_count'))}",
+        f"- Subagent Degrades: {_value(metrics.get('subagent_degrade_count'))}",
+        f"- Fan-out Rejected: {_value(metrics.get('fanout_rejected_count'))}",
+        f"- Dispatch Rejected: {_value(metrics.get('dispatch_rejected_count'))}",
+        f"- Subagent Missing Files: {_value(metrics.get('subagent_missing_file_count'))}",
+        f"- Subagent Infeasible: {_value(metrics.get('subagent_infeasible_count'))}",
+        f"- Subagent Recovered: {_value(metrics.get('subagent_recovered_count'))}",
         f"- Tokens: {_value(metrics.get('total_tokens'))}",
         f"- Duration: {_value(metrics.get('duration_ms'))} ms",
         "",
@@ -232,6 +297,86 @@ def _tool_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
         "loop_guard_denials": loop_denials,
         "workspace_denials": workspace_denials,
         "names": sorted(names),
+    }
+
+
+def _perfectionism_summary(events: list[dict[str, Any]]) -> dict[str, int]:
+    completion_declared = False
+    post_completion_tool_calls = 0
+    evidence_steps = set()
+    for event in events:
+        name = str(event.get("event") or "")
+        payload = event.get("payload") or {}
+        if name == "model.call.completed":
+            content = str(payload.get("content_preview") or "")
+            if _declares_completion(content):
+                completion_declared = True
+        elif name in {"tool.call.completed", "tool.call.failed"}:
+            tool_name = str(payload.get("tool_name") or "")
+            if tool_name in EVIDENCE_GATHERING_TOOLS:
+                step = event.get("step")
+                if step is not None:
+                    evidence_steps.add(step)
+            if completion_declared:
+                post_completion_tool_calls += 1
+    return {
+        "post_completion_tool_calls": post_completion_tool_calls,
+        "evidence_gathering_steps": len(evidence_steps),
+    }
+
+
+def _declares_completion(content: str) -> bool:
+    text = str(content or "").strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    if any(re.search(pattern, lowered, re.IGNORECASE) for pattern in COMPLETION_NEGATION_PATTERNS):
+        return False
+    return any(
+        re.search(pattern, text, re.IGNORECASE)
+        for pattern in COMPLETION_DECLARATION_PATTERNS
+    )
+
+
+def _subagent_summary(events: list[dict[str, Any]]) -> dict[str, int]:
+    retry_count = 0
+    recovered_count = 0
+    degrade_count = 0
+    infeasible_count = 0
+    fanout_rejected_count = 0
+    dispatch_rejected_count = 0
+    missing_file_count = 0
+    for event in events:
+        name = str(event.get("event") or "")
+        payload = event.get("payload") or {}
+        if name == "subagent.retry.completed":
+            retry_count += _int(payload.get("retry_count"), default=1)
+            if payload.get("recovered"):
+                recovered_count += 1
+        elif name in {"subagent.degrade", "subagent.degraded", "subagent.degrade.completed"}:
+            degrade_count += 1
+        elif name == "subagent.fanout.rejected":
+            fanout_rejected_count += 1
+            if payload.get("dispatch_rejected"):
+                dispatch_rejected_count += 1
+            missing_file_count += len(payload.get("missing_paths") or [])
+        elif name == "subagent.completed":
+            reason = str(payload.get("failure_reason") or "")
+            if reason in SUBAGENT_TERMINAL_REASONS:
+                infeasible_count += 1
+            if reason == "subagent_missing_required_files":
+                missing_file_count += 1
+            retry_count += _int(payload.get("retry_count"), default=0)
+            if payload.get("recovered"):
+                recovered_count += 1
+    return {
+        "retry_count": retry_count,
+        "degrade_count": degrade_count,
+        "fanout_rejected_count": fanout_rejected_count,
+        "dispatch_rejected_count": dispatch_rejected_count,
+        "missing_file_count": missing_file_count,
+        "infeasible_count": infeasible_count,
+        "recovered_count": recovered_count,
     }
 
 
@@ -569,6 +714,13 @@ def _value(value: Any) -> str:
     if value is None or value == "":
         return "-"
     return str(value)
+
+
+def _int(value: Any, *, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _escape(value: Any) -> str:

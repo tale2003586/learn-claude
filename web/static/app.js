@@ -1,3 +1,5 @@
+const CODING_WORKSPACE_STORAGE_KEY = "codingWorkspaceRoot";
+
 const state = {
   sessionId: "default",
   rawSession: false,
@@ -16,6 +18,8 @@ const state = {
   fileEntries: [],
   analysisBusy: false,
   currentUser: { id: "local", role: "admin" },
+  defaultCodingWorkspaceRoot: "",
+  codingWorkspaceRoot: localStorage.getItem(CODING_WORKSPACE_STORAGE_KEY) || "",
 };
 
 const els = {
@@ -29,6 +33,11 @@ const els = {
   mainViewPanels: [...document.querySelectorAll("[data-main-view-panel]")],
   workspaceLabel: document.querySelector("#workspaceLabel"),
   workspacePath: document.querySelector("#workspacePath"),
+  workspaceForm: document.querySelector("#workspaceForm"),
+  workspaceInput: document.querySelector("#workspaceInput"),
+  workspaceSaveBtn: document.querySelector("#workspaceSaveBtn"),
+  workspaceResetBtn: document.querySelector("#workspaceResetBtn"),
+  codingWorkspacePath: document.querySelector("#codingWorkspacePath"),
   statusBadge: document.querySelector("#statusBadge"),
   sessionsList: document.querySelector("#sessionsList"),
   sessionSearch: document.querySelector("#sessionSearch"),
@@ -143,6 +152,55 @@ function setStatus(text, kind = "") {
   els.statusBadge.className = `status-badge ${kind}`.trim();
 }
 
+function activeCodingWorkspaceRoot() {
+  if (state.currentUser.role !== "admin") return "";
+  return (state.codingWorkspaceRoot || state.defaultCodingWorkspaceRoot || "").trim();
+}
+
+function setCodingWorkspaceRoot(value, { persist = true } = {}) {
+  state.codingWorkspaceRoot = (value || "").trim();
+  if (persist) {
+    if (state.codingWorkspaceRoot) {
+      localStorage.setItem(CODING_WORKSPACE_STORAGE_KEY, state.codingWorkspaceRoot);
+    } else {
+      localStorage.removeItem(CODING_WORKSPACE_STORAGE_KEY);
+    }
+  }
+  renderCodingWorkspace();
+}
+
+function resetCodingWorkspaceRoot() {
+  localStorage.removeItem(CODING_WORKSPACE_STORAGE_KEY);
+  state.codingWorkspaceRoot = "";
+  renderCodingWorkspace();
+}
+
+function renderCodingWorkspace() {
+  const admin = state.currentUser.role === "admin";
+  const active = activeCodingWorkspaceRoot();
+  if (els.workspaceForm) {
+    els.workspaceForm.hidden = !admin;
+  }
+  if (els.workspaceInput) {
+    els.workspaceInput.disabled = !admin || state.busy || state.rawSession;
+    els.workspaceInput.value = state.codingWorkspaceRoot || state.defaultCodingWorkspaceRoot || "";
+  }
+  if (els.workspaceSaveBtn) {
+    els.workspaceSaveBtn.disabled = !admin || state.busy || state.rawSession;
+  }
+  if (els.workspaceResetBtn) {
+    els.workspaceResetBtn.disabled = !admin || state.busy || state.rawSession || !state.defaultCodingWorkspaceRoot;
+  }
+  if (els.codingWorkspacePath) {
+    els.codingWorkspacePath.textContent = active || "-";
+  }
+}
+
+function workspacePayload() {
+  const workspaceRoot = activeCodingWorkspaceRoot();
+  return workspaceRoot ? { workspace_root: workspaceRoot } : {};
+}
+
 function redirectToLogin() {
   const next = `${window.location.pathname}${window.location.search}`;
   window.location.assign(`/login?next=${encodeURIComponent(next)}`);
@@ -156,6 +214,7 @@ function setBusy(value) {
     button.disabled = value;
   }
   els.composerState.textContent = value ? "思考中" : state.rawSession ? "只读会话" : "";
+  renderCodingWorkspace();
 }
 
 function setSidebarPanel(panelName) {
@@ -241,6 +300,7 @@ function updateMetrics(session = {}) {
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", active ? "true" : "false");
   }
+  renderCodingWorkspace();
 }
 
 function messageText(message) {
@@ -867,6 +927,7 @@ async function loadHealth() {
   try {
     const data = await fetchJson("/api/health");
     state.currentUser = data.user || state.currentUser;
+    state.defaultCodingWorkspaceRoot = data.coding_workspace || "";
     els.workspaceLabel.textContent = `${state.currentUser.id} · ${state.currentUser.role}`;
     els.sidebarUserLabel.textContent = state.currentUser.id;
     els.workspacePath.textContent = data.workspace;
@@ -939,6 +1000,7 @@ async function sendMessage(message) {
       body: JSON.stringify({
         session_id: state.sessionId,
         message,
+        ...workspacePayload(),
       }),
     }, (event) => {
       if (event.type === "delta") {
@@ -1166,6 +1228,15 @@ els.filePreviewModal.addEventListener("cancel", (event) => {
 els.analysisForm.addEventListener("submit", (event) => {
   event.preventDefault();
   submitAnalysis();
+});
+els.workspaceForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  setCodingWorkspaceRoot(els.workspaceInput.value);
+  els.composerState.textContent = "工作路径已保存";
+});
+els.workspaceResetBtn.addEventListener("click", () => {
+  resetCodingWorkspaceRoot();
+  els.composerState.textContent = "已恢复默认工作路径";
 });
 
 async function init() {

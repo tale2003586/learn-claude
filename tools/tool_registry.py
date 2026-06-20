@@ -12,6 +12,11 @@ from tools.policy import (
 SESSION_SCOPED_TOOLS = {
     "bash",
     "list_files",
+    "rg",
+    "grep",
+    "nl",
+    "repo_map",
+    "code_outline",
     "read_file",
     "write_file",
     "edit_file",
@@ -164,6 +169,9 @@ class ToolRegistry:
         *,
         session=None,
         mode: str = "coding",
+        trace_store=None,
+        run_state=None,
+        parent_span_id: str | None = None,
     ) -> str:
         if name == "tool_search":
             return self._tool_search(args.get("query", ""), session=session, mode=mode)
@@ -181,6 +189,10 @@ class ToolRegistry:
             handler_args = dict(args)
             if tool.session_scoped or name in SESSION_SCOPED_TOOLS:
                 handler_args["_session"] = session
+            if name in {"task", "parallel_tasks"}:
+                handler_args["_trace_store"] = trace_store
+                handler_args["_run_state"] = run_state
+                handler_args["_parent_span_id"] = parent_span_id
             return tool.handler(**handler_args)
         except Exception as e:
             return f"Error: {e}"
@@ -328,6 +340,11 @@ def _risk_for_tool(name: str) -> str:
         return "high"
     if name in {
         "list_files",
+        "rg",
+        "grep",
+        "nl",
+        "repo_map",
+        "code_outline",
         "read_file",
         "git_status",
         "git_diff",
@@ -351,6 +368,11 @@ def _modes_for_tool(name: str) -> set[str]:
     coding_tools = {
         "bash",
         "list_files",
+        "rg",
+        "grep",
+        "nl",
+        "repo_map",
+        "code_outline",
         "read_file",
         "write_file",
         "edit_file",
@@ -384,6 +406,11 @@ def _modes_for_tool(name: str) -> set[str]:
     teammate_tools = {
         "bash",
         "list_files",
+        "rg",
+        "grep",
+        "nl",
+        "repo_map",
+        "code_outline",
         "read_file",
         "write_file",
         "edit_file",

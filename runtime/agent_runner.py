@@ -43,6 +43,7 @@ class AgentRunner:
         on_text: Callable[[str], None] | None = None,
         run_state=None,
         trace_store=None,
+        trace_parent_span_id: str | None = None,
     ) -> None:
         context_builder = build_context or self._build_context
         turn_finished = after_turn or self._touch_session
@@ -69,6 +70,7 @@ class AgentRunner:
             on_text=on_text,
             run_state=run_state,
             trace_store=trace_store,
+            trace_parent_span_id=trace_parent_span_id,
         )
 
     def reset_turn_state(self, session) -> None:

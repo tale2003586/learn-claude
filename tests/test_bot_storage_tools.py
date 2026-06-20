@@ -99,7 +99,10 @@ class BotStorageToolTests(unittest.TestCase):
                 escape = handlers.run_storage_read("../private.txt")
 
             self.assertEqual("uploads/note.txt", listing["entries"][0]["path"])
-            self.assertEqual("first\nsecond\n... (1 more lines)", read)
+            self.assertIn("first\nsecond", read)
+            self.assertIn("storage_read_file", read)
+            self.assertIn("offset=2", read)
+            self.assertIn("1 lines remain", read)
             self.assertIn("escapes allowed directory", escape)
 
 

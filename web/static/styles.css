@@ -608,6 +608,49 @@ button {
   padding: 12px;
 }
 
+.workspace-form {
+  display: grid;
+  gap: 9px;
+}
+
+.workspace-form label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.workspace-form input {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  outline: none;
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.workspace-form input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.14);
+}
+
+.workspace-form input:disabled {
+  color: var(--muted);
+  background: var(--surface-soft);
+}
+
+.workspace-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.workspace-form-actions button {
+  flex: 1 1 74px;
+}
+
 .sidebar-account {
   display: flex;
   align-items: center;

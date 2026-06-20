@@ -3,7 +3,13 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from models.provider import OpenAICompatibleProvider
-from web.server import RequestHandler, render_chat_markdown
+from web.server import (
+    RequestHandler,
+    _build_subagent_logs,
+    _parent_trace_events,
+    _render_subagent_logs,
+    render_chat_markdown,
+)
 
 
 def _chunk(*, content=None, tool_calls=None):
@@ -116,6 +122,7 @@ class StreamingHttpTests(unittest.TestCase):
         handler._read_json_body = lambda: {
             "session_id": "default",
             "message": "hello",
+            "workspace_root": "/tmp/project",
         }
         handler._send_stream_headers = lambda: None
         events = []
@@ -126,7 +133,7 @@ class StreamingHttpTests(unittest.TestCase):
 
         self.assertEqual(("default", "hello"), agent_service.request)
         self.assertEqual(("local", "admin"), agent_service.user)
-        self.assertIsNone(agent_service.workspace_root)
+        self.assertEqual("/tmp/project", agent_service.workspace_root)
         self.assertEqual(["delta", "delta", "complete"], [event["type"] for event in events])
         self.assertEqual("你好", events[-1]["reply"])
 
@@ -142,6 +149,74 @@ class StreamingHttpTests(unittest.TestCase):
 
         self.assertIn(("X-Accel-Buffering", "no"), headers)
         self.assertIn(("Content-Type", "application/x-ndjson; charset=utf-8"), headers)
+
+
+class WebRunTraceTests(unittest.TestCase):
+    def test_subagent_events_are_grouped_for_run_detail(self) -> None:
+        events = [
+            {
+                "timestamp": "2026-06-18T10:00:00Z",
+                "session_id": "web:parent",
+                "event": "tool.call.completed",
+                "payload": {"tool_name": "parallel_tasks"},
+            },
+            {
+                "timestamp": "2026-06-18T10:00:01Z",
+                "session_id": "subtask:explore:abc123",
+                "event": "subagent.started",
+                "span_id": "run:tool:1:subagent:0",
+                "parent_span_id": "run:tool:1",
+                "payload": {
+                    "agent_type": "explore",
+                    "description": "memory scan",
+                    "prompt_preview": "Inspect memory2",
+                },
+            },
+            {
+                "timestamp": "2026-06-18T10:00:02Z",
+                "session_id": "subtask:explore:abc123",
+                "event": "tool.call.completed",
+                "step": 1,
+                "span_id": "run:tool:1:subagent:0:tool:1:call-read",
+                "parent_span_id": "run:tool:1:subagent:0:step:1",
+                "payload": {
+                    "tool_name": "read_file",
+                    "status": "success",
+                    "output_preview": "class Retriever",
+                },
+            },
+            {
+                "timestamp": "2026-06-18T10:00:03Z",
+                "session_id": "subtask:explore:abc123",
+                "event": "subagent.completed",
+                "span_id": "run:tool:1:subagent:0",
+                "parent_span_id": "run:tool:1",
+                "payload": {
+                    "agent_type": "explore",
+                    "success": True,
+                    "truncated": False,
+                    "tool_count": 1,
+                    "reasoning_steps": 2,
+                    "summary_preview": "memory2 uses retriever.py",
+                },
+            },
+        ]
+
+        subagents = _build_subagent_logs(events)
+        parent_events = _parent_trace_events(events)
+        html = _render_subagent_logs(subagents)
+
+        self.assertEqual(1, len(subagents))
+        self.assertEqual(["web:parent"], [event["session_id"] for event in parent_events])
+        self.assertEqual("subtask:explore:abc123", subagents[0]["session_id"])
+        self.assertEqual("memory scan", subagents[0]["description"])
+        self.assertEqual(["read_file"], subagents[0]["tools"])
+        self.assertEqual(1, subagents[0]["tool_calls"])
+        self.assertIn("memory scan", html)
+        self.assertIn("class Retriever", html)
+        self.assertIn("memory2 uses retriever.py", html)
+        self.assertIn('<details class="subagent">', html)
+        self.assertNotIn('<details class="subagent" open>', html)
 
 
 if __name__ == "__main__":

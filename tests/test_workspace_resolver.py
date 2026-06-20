@@ -11,6 +11,28 @@ class WorkspaceResolverTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "requires a session"):
             safe_workspace_path("README.md")
 
+    def test_safe_workspace_path_rejects_absolute_paths_with_relative_hint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "project"
+            source = workspace / "src"
+            source.mkdir(parents=True)
+            session = Session(
+                id="task:workspace",
+                metadata={"workspace_root": str(workspace)},
+            )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                r"Absolute workspace paths are not allowed: .+ Use relative path 'src'",
+            ):
+                safe_workspace_path(str(source), session=session)
+
+            with self.assertRaisesRegex(
+                ValueError,
+                r"Absolute workspace paths are not allowed: .+ Use '\.' for the workspace root",
+            ):
+                safe_workspace_path(str(workspace), session=session)
+
     def test_safe_workspace_path_blocks_symlink_escape(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
             workspace = Path(tmp)

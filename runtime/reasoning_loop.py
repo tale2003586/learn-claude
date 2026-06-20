@@ -1,7 +1,15 @@
+import math
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Callable
 
+from config import REASONING_FINISHING_REMINDER_RATIO
+from runtime.failure_reasons import (
+    INCOMPLETE_STEP_LIMIT_PREFIX,
+    REASONING_LOOP_STOP_MESSAGE_KEY,
+    REASONING_LOOP_STOP_REASON_KEY,
+    StopReason,
+)
 from runtime.token_estimator import emergency_trim, estimate_tokens, safe_context_limit
 from runtime.trace.events import (
     CONTEXT_BUILD_COMPLETED,
@@ -18,7 +26,13 @@ from runtime.trace.events import (
     TOOL_CALL_STARTED,
 )
 from runtime.trace.trace_store import event_preview
-from tools.executor import ToolExecutionRequest
+from tools.executor import ToolExecutionRequest, ToolExecutionResult
+
+
+WEB_SEARCH_BUDGET_LIMIT_KEY = "web_search_budget_limit"
+WEB_SEARCH_BUDGET_USED_KEY = "web_search_budget_used"
+WEB_SEARCH_BUDGET_REMAINING_KEY = "web_search_budget_remaining"
+FINISHING_REMINDER_SENT_KEY = "reasoning_finishing_reminder_sent"
 
 
 DEFAULT_MAX_REASONING_STEPS = 24
@@ -67,6 +81,7 @@ class ReasoningLoop:
         on_text: Callable[[str], None] | None = None,
         run_state=None,
         trace_store=None,
+        trace_parent_span_id: str | None = None,
     ) -> None:
         reasoning_steps = 0
         unavailable_attempts: dict[str, int] = {}
@@ -85,7 +100,7 @@ class ReasoningLoop:
                         "本轮已停止：工具推理步骤超过上限 "
                         f"({self.max_reasoning_steps})，已触发循环保护。"
                     ),
-                    reason="reasoning_step_limit",
+                    reason=StopReason.REASONING_STEP_LIMIT,
                     after_turn=after_turn,
                     on_text=on_text,
                     run_state=run_state,
@@ -96,6 +111,12 @@ class ReasoningLoop:
                 run_state.record_reasoning_step(reasoning_steps)
                 if trace_store is not None:
                     trace_store.write_run_state(run_state)
+            self._maybe_inject_finishing_reminder(
+                session,
+                reasoning_steps,
+                trace_store=trace_store,
+                run_state=run_state,
+            )
             self._trace(trace_store, run_state, "reasoning_step_started", {
                 "step": reasoning_steps,
                 "session_id": session.id,
@@ -110,6 +131,7 @@ class ReasoningLoop:
                 },
                 step=reasoning_steps,
                 span_id=_step_span_id(run_state, reasoning_steps),
+                parent_span_id=trace_parent_span_id,
             )
             context_started = time.perf_counter()
             context_span_id = _context_span_id(run_state, reasoning_steps)
@@ -164,7 +186,7 @@ class ReasoningLoop:
                     run_state,
                     REASONING_STEP_COMPLETED,
                     {
-                        "reason": "empty_model_response",
+                        "reason": StopReason.EMPTY_MODEL_RESPONSE.value,
                         "tool_call_count": 0,
                         "attempt": empty_model_responses,
                     },
@@ -179,7 +201,7 @@ class ReasoningLoop:
                     self._stop_turn(
                         session,
                         "本轮已停止：模型连续返回空回复且没有工具调用。",
-                        reason="empty_model_response",
+                        reason=StopReason.EMPTY_MODEL_RESPONSE,
                         after_turn=after_turn,
                         on_text=on_text,
                         run_state=run_state,
@@ -197,7 +219,7 @@ class ReasoningLoop:
                     ),
                     metadata={
                         "kind": "runtime_retry",
-                        "reason": "empty_model_response",
+                        "reason": StopReason.EMPTY_MODEL_RESPONSE.value,
                     },
                 )
                 continue
@@ -259,7 +281,7 @@ class ReasoningLoop:
                 self._stop_turn(
                     session,
                     "本轮已停止：模型重复调用同一工具，已触发循环保护。请调整请求后重试。",
-                    reason="repeated_tool_call",
+                    reason=StopReason.REPEATED_TOOL_CALL,
                     after_turn=after_turn,
                     on_text=on_text,
                     run_state=run_state,
@@ -277,7 +299,7 @@ class ReasoningLoop:
                             f"`{tool_name}`。请切换到允许该工具的模式，"
                             "或让助手使用 `tool_search` 选择当前模式可用的工具。"
                         ),
-                        reason="unavailable_tool_loop",
+                        reason=StopReason.UNAVAILABLE_TOOL_LOOP,
                         after_turn=after_turn,
                         on_text=on_text,
                         run_state=run_state,
@@ -578,6 +600,10 @@ class ReasoningLoop:
                     session=session,
                     mode=profile.tool_mode,
                 )
+                search_budget_denial = self._web_search_budget_denial(
+                    session,
+                    call.name,
+                )
                 request = ToolExecutionRequest(
                     call_id=call.id,
                     tool_name=call.name,
@@ -586,22 +612,34 @@ class ReasoningLoop:
                     source=str((session.metadata or {}).get("kind", "passive")),
                     metadata=session.metadata,
                 )
-                result = self.tool_executor.execute(
-                    request,
-                    lambda name, args: self.tools.execute(
-                        name,
-                        args,
-                        session=session,
-                        mode=profile.tool_mode,
-                    ),
+                if search_budget_denial:
+                    started = time.perf_counter()
+                    result = self._denied_tool_result(
+                        output=search_budget_denial,
+                        arguments=call.arguments,
+                        duration_ms=_elapsed_ms(started),
+                    )
+                else:
+                    result = self.tool_executor.execute(
+                        request,
+                        lambda name, args: self.tools.execute(
+                            name,
+                            args,
+                            session=session,
+                            mode=profile.tool_mode,
+                            trace_store=trace_store,
+                            run_state=run_state,
+                            parent_span_id=span_id,
+                        ),
+                    )
+                output = self._with_web_search_budget_notice(
+                    session,
+                    call.name,
+                    result.output,
                 )
-                output = result.output
                 if execution_error:
                     summary.unavailable_tools.append(call.name)
-                if any(
-                    item.hook_name == "tool_loop_guard" and item.decision == "deny"
-                    for item in result.pre_hook_trace
-                ):
+                if _is_loop_guard_denial(result):
                     summary.loop_guard_denied = True
                 summary.tool_results.append({
                     "name": call.name,
@@ -623,6 +661,11 @@ class ReasoningLoop:
                     "output_preview": event_preview(output),
                     "error_type": result.error_type,
                     "error_message": result.error_message,
+                    "truncated_output": _tool_output_truncated(output),
+                    "subagent_incomplete_count": _subagent_incomplete_count(
+                        call.name,
+                        output,
+                    ),
                     "pre_hook_trace": [
                         item.__dict__ for item in result.pre_hook_trace
                     ],
@@ -682,33 +725,158 @@ class ReasoningLoop:
     def _reasoning_budget_exceeded(self, session, reasoning_steps: int) -> bool:
         return reasoning_steps > self.max_reasoning_steps
 
+    def _maybe_inject_finishing_reminder(
+        self,
+        session,
+        reasoning_steps: int,
+        *,
+        trace_store=None,
+        run_state=None,
+    ) -> None:
+        metadata = getattr(session, "metadata", None)
+        if metadata is None:
+            return
+        if metadata.get(FINISHING_REMINDER_SENT_KEY):
+            return
+        reminder_step = self._finishing_reminder_step()
+        if reasoning_steps < reminder_step:
+            return
+        remaining_steps = max(0, self.max_reasoning_steps - reasoning_steps)
+        message = _finishing_reminder_message(
+            reasoning_steps=reasoning_steps,
+            max_reasoning_steps=self.max_reasoning_steps,
+            remaining_steps=remaining_steps,
+        )
+        session.add_message(
+            "system",
+            message,
+            metadata={
+                "kind": "runtime_finishing_reminder",
+                "reason": "reasoning_budget",
+                "step": reasoning_steps,
+                "max_reasoning_steps": self.max_reasoning_steps,
+                "remaining_steps": remaining_steps,
+            },
+        )
+        metadata[FINISHING_REMINDER_SENT_KEY] = True
+        self._trace(
+            trace_store,
+            run_state,
+            "reasoning.finishing_reminder.injected",
+            {
+                "step": reasoning_steps,
+                "max_reasoning_steps": self.max_reasoning_steps,
+                "remaining_steps": remaining_steps,
+                "ratio": REASONING_FINISHING_REMINDER_RATIO,
+                "message_preview": event_preview(message),
+            },
+            step=reasoning_steps,
+            span_id=_step_span_id(run_state, reasoning_steps),
+        )
+
+    def _finishing_reminder_step(self) -> int:
+        ratio = REASONING_FINISHING_REMINDER_RATIO
+        if ratio <= 0:
+            return self.max_reasoning_steps + 1
+        return max(1, min(self.max_reasoning_steps, math.ceil(self.max_reasoning_steps * ratio)))
+
+    def _web_search_budget_denial(self, session, tool_name: str) -> str:
+        if tool_name != "web_search":
+            return ""
+        limit = _int_metadata(session, WEB_SEARCH_BUDGET_LIMIT_KEY, 0)
+        if limit <= 0:
+            return ""
+        used = _int_metadata(session, WEB_SEARCH_BUDGET_USED_KEY, 0)
+        remaining = max(0, limit - used)
+        if remaining <= 0:
+            session.metadata[WEB_SEARCH_BUDGET_REMAINING_KEY] = 0
+            return (
+                "Error: web_search budget exhausted for this turn. "
+                "Do not call web_search again; answer using the search results "
+                "and context already available."
+            )
+        used += 1
+        session.metadata[WEB_SEARCH_BUDGET_USED_KEY] = used
+        session.metadata[WEB_SEARCH_BUDGET_REMAINING_KEY] = max(0, limit - used)
+        return ""
+
+    def _with_web_search_budget_notice(
+        self,
+        session,
+        tool_name: str,
+        output: str,
+    ) -> str:
+        if tool_name != "web_search":
+            return output
+        limit = _int_metadata(session, WEB_SEARCH_BUDGET_LIMIT_KEY, 0)
+        if limit <= 0:
+            return output
+        used = _int_metadata(session, WEB_SEARCH_BUDGET_USED_KEY, 0)
+        remaining = _int_metadata(
+            session,
+            WEB_SEARCH_BUDGET_REMAINING_KEY,
+            max(0, limit - used),
+        )
+        if remaining > 0:
+            instruction = (
+                f"You have {remaining} web_search calls remaining in this turn "
+                f"out of {limit}. Before searching again, consolidate queries and "
+                "only call web_search if the existing results are insufficient."
+            )
+        else:
+            instruction = (
+                f"You have used all {limit} web_search calls for this turn. "
+                "Do not call web_search again; complete the answer using the "
+                "results and context already available."
+            )
+        return (
+            "<web-search-budget remaining=\""
+            f"{remaining}\" used=\"{used}\" limit=\"{limit}\">\n"
+            f"{instruction}\n"
+            "</web-search-budget>\n\n"
+            f"{output}"
+        )
+
+    def _denied_tool_result(self, *, output: str, arguments: dict, duration_ms: float):
+        return ToolExecutionResult(
+            status="denied",
+            output=output,
+            final_arguments=arguments,
+            duration_ms=duration_ms,
+            error_type="ToolDenied",
+            error_message=output,
+        )
+
     def _stop_turn(
         self,
         session,
         message: str,
         *,
-        reason: str,
+        reason: str | StopReason,
         after_turn: Callable,
         on_text: Callable[[str], None] | None,
         run_state=None,
         trace_store=None,
     ) -> None:
+        reason_value = str(reason)
         session.add_message(
             "assistant",
             message,
             metadata={
                 "kind": "agent_loop_guard",
-                "reason": reason,
+                "reason": reason_value,
             },
         )
+        session.metadata[REASONING_LOOP_STOP_REASON_KEY] = reason_value
+        session.metadata[REASONING_LOOP_STOP_MESSAGE_KEY] = message
         if on_text is not None:
             on_text(message)
         if run_state is not None:
-            run_state.stop(reason, message)
+            run_state.stop(reason_value, message)
             if trace_store is not None:
                 trace_store.write_run_state(run_state)
         self._trace(trace_store, run_state, "run_stopped", {
-            "reason": reason,
+            "reason": reason_value,
             "message_preview": event_preview(message),
         })
         after_turn(session)
@@ -833,6 +1001,26 @@ def _usage_payload(usage) -> dict:
         }
 
 
+def _finishing_reminder_message(
+    *,
+    reasoning_steps: int,
+    max_reasoning_steps: int,
+    remaining_steps: int,
+) -> str:
+    return (
+        '<runtime-finishing-reminder reason="reasoning_budget" '
+        f'step="{reasoning_steps}" max_steps="{max_reasoning_steps}" '
+        f'remaining_steps="{remaining_steps}">\n'
+        f"You have used {reasoning_steps}/{max_reasoning_steps} reasoning steps. "
+        "If the core task can already be answered, stop supplemental evidence "
+        "gathering and provide the final answer now. Treat exact line numbers, "
+        "citations, and formatting polish as nice-to-have rather than blockers. "
+        "Do not call nl, rg, grep, read_file, or bash only to perfect references; "
+        "use remaining tools only for blockers required to answer correctly.\n"
+        "</runtime-finishing-reminder>"
+    )
+
+
 def _elapsed_ms(started: float) -> float:
     return round((time.perf_counter() - started) * 1000, 3)
 
@@ -869,6 +1057,41 @@ def _context_report_payload(report) -> dict:
     if isinstance(report, dict):
         return dict(report)
     return getattr(report, "__dict__", {}) or {}
+
+
+def _is_loop_guard_denial(result: ToolExecutionResult) -> bool:
+    traces = list(result.pre_hook_trace or []) + list(result.post_hook_trace or [])
+    return any(
+        item.hook_name == "tool_loop_guard" and item.decision == "deny"
+        for item in traces
+    )
+
+
+def _tool_output_truncated(output: str) -> bool:
+    text = str(output or "")
+    return any(
+        marker in text
+        for marker in (
+            "To continue: read_file(",
+            "To continue: storage_read_file(",
+            "To continue: sandbox_read_file(",
+            "To continue: list_files(",
+            "To continue: repo_map(",
+            "...[line truncated]",
+            "...[truncated]",
+        )
+    )
+
+
+def _subagent_incomplete_count(tool_name: str, output: str) -> int:
+    if tool_name != "parallel_tasks":
+        return 0
+    text = str(output or "")
+    return max(
+        text.count('"truncated": true'),
+        text.count(INCOMPLETE_STEP_LIMIT_PREFIX),
+        text.count('"incomplete": true'),
+    )
 
 
 def _xml_escape(value: str) -> str:
@@ -1070,21 +1293,30 @@ def _tool_names(tools: list[dict]) -> list[str]:
 
 
 def _context_span_id(run_state, step: int) -> str:
-    run_id = getattr(run_state, "run_id", "run")
-    return f"{run_id}:context:{step}"
+    return f"{_span_prefix(run_state)}:context:{step}"
 
 
 def _step_span_id(run_state, step: int) -> str:
-    run_id = getattr(run_state, "run_id", "run")
-    return f"{run_id}:step:{step}"
+    return f"{_span_prefix(run_state)}:step:{step}"
 
 
 def _model_span_id(run_state, step: int) -> str:
-    run_id = getattr(run_state, "run_id", "run")
-    return f"{run_id}:model:{step}"
+    return f"{_span_prefix(run_state)}:model:{step}"
 
 
 def _tool_span_id(run_state, step: int, call_id: str) -> str:
-    run_id = getattr(run_state, "run_id", "run")
     suffix = str(call_id or "unknown").replace(":", "_")
-    return f"{run_id}:tool:{step}:{suffix}"
+    return f"{_span_prefix(run_state)}:tool:{step}:{suffix}"
+
+
+def _span_prefix(run_state) -> str:
+    metadata = getattr(run_state, "metadata", {}) or {}
+    prefix = metadata.get("trace_span_prefix") if isinstance(metadata, dict) else None
+    return str(prefix or getattr(run_state, "run_id", "run") or "run")
+
+
+def _int_metadata(session, key: str, default: int) -> int:
+    try:
+        return int((getattr(session, "metadata", {}) or {}).get(key, default))
+    except (TypeError, ValueError):
+        return int(default)

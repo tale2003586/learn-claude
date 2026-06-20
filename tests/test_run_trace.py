@@ -1,6 +1,7 @@
 import asyncio
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,11 +10,13 @@ from bus.events import InboundMessage
 from bus.user_bus import MessageBus
 from plugins import PluginManager
 from plugins.run_report import RunReportPlugin
+from runtime.background_memory import BackgroundMemoryLifecycle
 from runtime.agent_loop import AgentLoop
 from runtime.context import ContextBuilder as RealContextBuilder
 from runtime.pipeline import Pipeline
 from models.provider import LLMResponse, ToolCall
 from runtime.trace.run_state import RunState
+from runtime.trace.summary import build_trace_summary_payload
 from runtime.trace.trace_store import TraceStore
 from runtime.trace.workspace import capture_workspace_snapshot, diff_workspace_snapshots
 from runtime.workspace import WorkspaceResolver
@@ -101,6 +104,17 @@ class FakeMemoryLifecycle:
             },
         ])
         return result
+
+
+class SlowMemoryLifecycle(FakeMemoryLifecycle):
+    def __init__(self, delay: float = 0.2) -> None:
+        self.delay = delay
+        self.calls = 0
+
+    def after_turn(self, session) -> MemoryLifecycleResult:
+        self.calls += 1
+        time.sleep(self.delay)
+        return super().after_turn(session)
 
 
 def _tool_response(index: int, name="echo", arguments=None) -> LLMResponse:
@@ -224,6 +238,175 @@ def _events(path: Path) -> list[dict]:
 
 
 class RunTraceTests(unittest.TestCase):
+    def test_trace_metrics_include_loop_guard_regression_counters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            trace_store = TraceStore(Path(tmp) / ".runs")
+            run_state = RunState.create(session_id="web:test")
+            trace_store.start_run(run_state)
+            trace_store.append_event(run_state, "tool.call.completed", {
+                "tool_name": "read_file",
+                "status": "success",
+                "duration_ms": 1,
+                "final_arguments_preview": json.dumps({"path": "a.py"}),
+                "output_preview": "first",
+                "truncated_output": True,
+            })
+            trace_store.append_event(run_state, "tool.call.completed", {
+                "tool_name": "read_file",
+                "status": "success",
+                "duration_ms": 1,
+                "final_arguments_preview": json.dumps({"path": "a.py"}),
+                "output_preview": "first again",
+            })
+            trace_store.append_event(run_state, "tool.call.completed", {
+                "tool_name": "parallel_tasks",
+                "status": "success",
+                "duration_ms": 1,
+                "final_arguments_preview": json.dumps({"tasks": []}),
+                "output_preview": "{}",
+                "subagent_incomplete_count": 2,
+            })
+            run_state.finish_success("done")
+            trace_store.write_run_state(run_state)
+            trace_store.write_report(run_state, {"reply": "done"})
+
+            metrics = json.loads(
+                (trace_store.run_dir(run_state) / "metrics.json").read_text(encoding="utf-8")
+            )
+
+            self.assertEqual(1, metrics["duplicate_tool_call_count"])
+            self.assertEqual(0.3333, metrics["duplicate_tool_call_ratio"])
+            self.assertEqual(1, metrics["truncated_tool_output_count"])
+            self.assertEqual(2, metrics["subagent_incomplete_count"])
+            self.assertEqual(1, metrics["subagent_fanout_count"])
+
+    def test_trace_summary_counts_subagent_retry_degrade_and_recovery(self) -> None:
+        run_state = {
+            "run_id": "run-test",
+            "session_id": "web:test",
+            "status": "completed",
+            "reasoning_steps": 1,
+            "tool_calls": 1,
+        }
+        events = [
+            {
+                "event": "subagent.retry.completed",
+                "payload": {
+                    "retry_count": 1,
+                    "initial_failure_reason": "subagent_internal_error",
+                    "success": True,
+                    "recovered": True,
+                },
+            },
+            {
+                "event": "subagent.degrade.completed",
+                "payload": {"reason": "step_limit"},
+            },
+            {
+                "event": "subagent.fanout.rejected",
+                "payload": {
+                    "failure_reason": "subagent_missing_required_files",
+                    "dispatch_rejected": True,
+                    "missing_paths": ["frontend/dashboard/build.js"],
+                },
+            },
+            {
+                "event": "subagent.completed",
+                "payload": {
+                    "success": False,
+                    "failure_reason": "subagent_missing_required_files",
+                },
+            },
+        ]
+
+        summary = build_trace_summary_payload(
+            run_state=run_state,
+            metrics={},
+            report={},
+            events=events,
+        )
+
+        self.assertEqual(1, summary["metrics"]["subagent_retry_count"])
+        self.assertEqual(1, summary["metrics"]["subagent_recovered_count"])
+        self.assertEqual(1, summary["metrics"]["subagent_degrade_count"])
+        self.assertEqual(1, summary["metrics"]["fanout_rejected_count"])
+        self.assertEqual(1, summary["metrics"]["dispatch_rejected_count"])
+        self.assertEqual(2, summary["metrics"]["subagent_missing_file_count"])
+        self.assertEqual(1, summary["metrics"]["subagent_infeasible_count"])
+
+    def test_trace_summary_counts_perfectionism_tail_metrics(self) -> None:
+        run_state = {
+            "run_id": "run-test",
+            "session_id": "web:test",
+            "status": "completed",
+            "reasoning_steps": 14,
+            "tool_calls": 4,
+        }
+        events = [
+            {
+                "event": "tool.call.completed",
+                "step": 10,
+                "payload": {
+                    "tool_name": "read_file",
+                    "status": "success",
+                    "output_preview": "main evidence",
+                },
+            },
+            {
+                "event": "model.call.completed",
+                "step": 12,
+                "payload": {
+                    "content_preview": "核心 reasoning + 工具执行链路已经补齐，现在给出总结。",
+                    "tool_calls": [{"name": "nl"}],
+                },
+            },
+            {
+                "event": "tool.call.completed",
+                "step": 12,
+                "payload": {
+                    "tool_name": "nl",
+                    "status": "success",
+                    "output_preview": "numbered lines",
+                },
+            },
+            {
+                "event": "tool.call.completed",
+                "step": 13,
+                "payload": {
+                    "tool_name": "rg",
+                    "status": "success",
+                    "output_preview": "more citations",
+                },
+            },
+            {
+                "event": "tool.call.completed",
+                "step": 13,
+                "payload": {
+                    "tool_name": "bash",
+                    "status": "success",
+                    "output_preview": "nl -ba output",
+                },
+            },
+            {
+                "event": "model.call.completed",
+                "step": 14,
+                "payload": {
+                    "content_preview": "final answer",
+                    "tool_calls": [],
+                },
+            },
+        ]
+
+        summary = build_trace_summary_payload(
+            run_state=run_state,
+            metrics={},
+            report={},
+            events=events,
+        )
+
+        self.assertEqual(3, summary["metrics"]["post_completion_tool_calls"])
+        self.assertEqual(3, summary["metrics"]["evidence_gathering_steps"])
+
     def test_tool_loop_context_preserves_active_turn_order(self) -> None:
         session = Session(id="web:default", current_mode="bot")
         session.add_message("user", "old task " + ("x" * 300))
@@ -393,6 +576,50 @@ class RunTraceTests(unittest.TestCase):
                 1,
                 trace_summary["memory"]["candidate_promotions"],
             )
+
+    def test_background_memory_lifecycle_does_not_block_pipeline_reply(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            trace_store = TraceStore(Path(tmp) / ".runs")
+            session = Session(id="web:default", current_mode="bot")
+            run_state = RunState.create(
+                session_id=session.id,
+                channel="web",
+                chat_id="default",
+                mode="bot",
+                execution_path="pipeline_bot",
+            )
+            trace_store.start_run(run_state)
+            slow_lifecycle = SlowMemoryLifecycle(delay=0.25)
+            background_lifecycle = BackgroundMemoryLifecycle(slow_lifecycle)
+            provider = ScriptedProvider([_final_response("done")])
+            pipeline = Pipeline(
+                tools=_registry(),
+                provider=provider,
+                model="test-model",
+                tool_executor=ToolExecutor([]),
+                context_builder=ContextBuilder(),
+                memory_lifecycle=background_lifecycle,
+            )
+
+            session.add_message("user", "我希望这个项目用 pytest 写测试")
+            started = time.perf_counter()
+            reply = pipeline.run(
+                session,
+                SimpleNamespace(tool_mode="bot"),
+                run_state=run_state,
+                trace_store=trace_store,
+            )
+            elapsed = time.perf_counter() - started
+
+            self.assertEqual("done", reply)
+            self.assertLess(elapsed, 0.2)
+            self.assertTrue(background_lifecycle.wait(timeout=2.0))
+            self.assertEqual(1, slow_lifecycle.calls)
+
+            events = _events(trace_store.run_dir(run_state) / "trace.jsonl")
+            event_names = [event["event"] for event in events]
+            self.assertIn("memory.lifecycle.scheduled", event_names)
+            self.assertIn("memory.lifecycle.completed", event_names)
 
     def test_coding_task_session_is_bound_to_parent_run(self) -> None:
         class Extractor:

@@ -112,10 +112,21 @@ class TaskSessionRunner:
         )
         record.session.add_message(
             "user",
-            self._build_task_request(parent_session.id, user_text, global_memory),
+            self._build_task_request(
+                parent_session.id,
+                user_text,
+                global_memory,
+                workspace=workspace,
+            ),
         )
 
-        task_pipeline = self._build_task_pipeline(task_memory)
+        task_pipeline = self._build_task_pipeline(
+            task_memory,
+            max_reasoning_steps=_task_reasoning_budget(
+                user_text,
+                default_steps=getattr(self.base_pipeline, "max_reasoning_steps", 24),
+            ),
+        )
         task_pipeline.run(
             record.session,
             profile,
@@ -199,13 +210,19 @@ class TaskSessionRunner:
                 trace_store.write_run_state(run_state)
         return self._format_parent_reply(record, reply, promotion, artifacts)
 
-    def _build_task_pipeline(self, task_memory: MemoryStore) -> Pipeline:
+    def _build_task_pipeline(
+        self,
+        task_memory: MemoryStore,
+        *,
+        max_reasoning_steps: int | None = None,
+    ) -> Pipeline:
         context_builder = ContextBuilder(memory_store=task_memory)
         memory_lifecycle = TaskMemoryLifecycle(task_memory)
         if hasattr(self.base_pipeline, "fork"):
             return self.base_pipeline.fork(
                 context_builder=context_builder,
                 memory_lifecycle=memory_lifecycle,
+                max_reasoning_steps=max_reasoning_steps,
             )
         return Pipeline(
             tools=self.base_pipeline.tools,
@@ -214,6 +231,7 @@ class TaskSessionRunner:
             tool_executor=self.base_pipeline.tool_executor,
             context_builder=context_builder,
             memory_lifecycle=memory_lifecycle,
+            max_reasoning_steps=max_reasoning_steps or self.base_pipeline.max_reasoning_steps,
         )
 
     def _seed_task_memory(
@@ -240,8 +258,12 @@ class TaskSessionRunner:
         parent_session_id: str,
         user_text: str,
         global_memory: MemoryStore,
+        *,
+        workspace,
     ) -> str:
         global_memory_text = global_memory.read_all()
+        workspace_root = str(workspace.root)
+        workspace_display = str(getattr(workspace, "display_name", "") or workspace_root)
         return (
             f"<task-session parent_session=\"{parent_session_id}\">\n"
             "You are running in an isolated coding task session. "
@@ -250,6 +272,20 @@ class TaskSessionRunner:
             "When you discover a reusable project conclusion, call memorize with "
             "section='pending' so it can be reviewed for global promotion.\n"
             "</task-session>\n\n"
+            f"<coding-workspace root=\"{workspace_root}\" display=\"{workspace_display}\">\n"
+            "All file tools use paths relative to this workspace. "
+            "bash already runs at this workspace root; do not cd to the host Codex workdir "
+            "or to absolute paths outside this workspace. "
+            "When read_file/list_files returns a truncated result, continue with the "
+            "provided offset instead of rereading the same page.\n"
+            "</coding-workspace>\n\n"
+            "<execution-guidance>\n"
+            "For broad read-only architecture reviews with independent lines of inquiry, "
+            "use one early parallel_tasks fan-out, then synthesize the returned findings. "
+            "If a subagent reports success=false or truncated=true, state that limitation "
+            "and answer from the evidence already available unless one targeted follow-up "
+            "read is necessary.\n"
+            "</execution-guidance>\n\n"
             "<global-memory-snapshot>\n"
             f"{global_memory_text}\n"
             "</global-memory-snapshot>\n\n"
@@ -301,6 +337,22 @@ def _pipeline_model_for(pipeline: Pipeline, purpose: str):
     if hasattr(pipeline, "provider_and_model_for"):
         return pipeline.provider_and_model_for(purpose)
     return pipeline.provider, pipeline.model
+
+
+def _task_reasoning_budget(user_text: str, *, default_steps: int) -> int:
+    text = str(user_text or "")
+    independent_markers = [
+        "独立",
+        "多条",
+        "分别检查",
+        "架构梳理",
+        "repository-wide",
+        "multi-file",
+    ]
+    numbered_lines = sum(1 for line in text.splitlines() if line.strip().startswith(tuple("123456789")))
+    if numbered_lines >= 3 or any(marker in text for marker in independent_markers):
+        return max(int(default_steps or 24), 36)
+    return int(default_steps or 24)
 
 
 def _portable_path(path) -> str:
