@@ -1,7 +1,7 @@
 import asyncio
 from pathlib import Path
 
-from core.bootstrap import build_runtime
+from runtime.bootstrap import build_runtime
 
 
 async def print_cli_message(message) -> None:
@@ -11,11 +11,13 @@ async def print_cli_message(message) -> None:
 
 async def main_async() -> None:
     print(f"Agent Harness - {Path.cwd()}")
+    print("Set coding workspace with: /workspace /path/to/project")
     print("Type 'q' to quit.\n")
 
     runtime = build_runtime()
     runtime.bus.subscribe_outbound("cli", print_cli_message)
     runtime.start()
+    workspace_root: str | None = None
 
     try:
         while True:
@@ -29,8 +31,14 @@ async def main_async() -> None:
                 continue
             if query.strip().lower() in ("q", "quit", "exit"):
                 break
+            if query.strip().startswith("/workspace "):
+                workspace_root = query.strip().split(" ", 1)[1].strip()
+                print(f"Workspace set to: {workspace_root}")
+                print("---")
+                continue
 
-            await runtime.submit_user_message(query)
+            metadata = {"workspace_root": workspace_root} if workspace_root else None
+            await runtime.submit_user_message(query, metadata=metadata)
             await runtime.run_once()
             print("---")
     finally:

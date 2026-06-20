@@ -1,7 +1,8 @@
 from pathlib import Path
 from typing import Iterable
+from weakref import WeakKeyDictionary
 
-from .base import Plugin, PluginContext, TurnContext, TurnResult
+from .base import EvalContext, Plugin, PluginContext, RunContext, TurnContext, TurnResult
 
 
 class PluginManager:
@@ -22,6 +23,7 @@ class PluginManager:
         self.loaded_names: list[str] = []
         self._tool_names: list[str] = []
         self._tool_hooks = []
+        self._plugin_refs = WeakKeyDictionary()
 
         for plugin in plugins or []:
             self.register(plugin)
@@ -36,9 +38,13 @@ class PluginManager:
             tool_registry=self.tool_registry,
             sessions=self.sessions,
             memory_store=self.memory_store,
+            plugin_manager=self,
         )
         plugin.setup(context)
-        setattr(plugin, "_plugin_manager", self)
+        try:
+            self._plugin_refs[plugin] = self
+        except TypeError:
+            pass
         self.plugins.append(plugin)
         self.loaded_names.append(plugin.name)
 
@@ -50,6 +56,8 @@ class PluginManager:
                 enabled_modes=tool.enabled_modes,
                 source=tool.source,
                 always_on=tool.always_on,
+                session_scoped=tool.session_scoped,
+                admin_only=tool.admin_only,
             )
             self._tool_names.append(tool.schema["function"]["name"])
 
@@ -67,6 +75,28 @@ class PluginManager:
         context = TurnContext(inbound=inbound, session=session)
         for plugin in self.plugins:
             plugin.after_turn(context, reply)
+
+    def after_run(
+        self,
+        *,
+        run_state,
+        session,
+        run_dir: Path | None = None,
+        report: dict | None = None,
+    ) -> None:
+        context = RunContext(
+            run_state=run_state,
+            session=session,
+            run_dir=run_dir,
+            report=report,
+        )
+        for plugin in self.plugins:
+            plugin.after_run(context)
+
+    def after_eval(self, *, eval_dir: Path, payload: dict) -> None:
+        context = EvalContext(eval_dir=eval_dir, payload=payload)
+        for plugin in self.plugins:
+            plugin.after_eval(context)
 
     def status_text(self) -> str:
         if not self.loaded_names:

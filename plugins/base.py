@@ -12,6 +12,8 @@ class ToolRegistration:
     risk: str = "normal"
     enabled_modes: set[str] | None = None
     always_on: bool = False
+    session_scoped: bool = False
+    admin_only: bool = False
     source: str = "plugin"
 
 
@@ -21,6 +23,7 @@ class PluginContext:
     tool_registry: Any
     sessions: Any = None
     memory_store: Any = None
+    plugin_manager: Any = None
 
 
 @dataclass
@@ -33,6 +36,20 @@ class TurnContext:
 class TurnResult:
     abort: bool = False
     reply: str = ""
+
+
+@dataclass
+class RunContext:
+    run_state: Any
+    session: Any
+    run_dir: Path | None = None
+    report: dict | None = None
+
+
+@dataclass
+class EvalContext:
+    eval_dir: Path
+    payload: dict
 
 
 class Plugin:
@@ -51,4 +68,10 @@ class Plugin:
         return None
 
     def after_turn(self, context: TurnContext, reply: str) -> None:
+        return None
+
+    def after_run(self, context: RunContext) -> None:
+        return None
+
+    def after_eval(self, context: EvalContext) -> None:
         return None

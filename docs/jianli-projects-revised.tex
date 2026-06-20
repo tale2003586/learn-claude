@@ -1,0 +1,30 @@
+\begin{itemize}
+    \item \textbf{多入口 LLM Agent Runtime：可控、可观测的自研 Agent 执行引擎} \hfill 20XX.X --- 至今
+    \begin{itemize}
+        \item \textbf{项目概述}: 从零自研多入口 Agent Runtime（非 LangChain 封装）, 统一 CLI / Web / Telegram / 飞书四类入口, 作为 Coding Agent 与代码安全 RAG 的公共执行地基; 核心代码约 36K 行, 配套 49 套 pytest 用例覆盖记忆、上下文、工具沙箱、模型路由与网关集成等核心路径
+        \item \textbf{Runtime 架构}: 将各入口归一为 inbound/outbound 消息抽象, 通过 \texttt{build\_runtime} 集中装配消息总线、会话管理、模型池、工具执行器、记忆生命周期、trace store 等 14+ 组件, 将控制面、能力面与证据面解耦, 降低后续扩展新入口和新能力的改造成本
+        \item \textbf{工具治理与安全执行}: 设计"模型请求、Runtime 裁决、工具执行器落地"的工具调用链路, 引入注册校验、模式可见性、延迟解锁、Hook 改写/拒绝与循环保护; 通过 \texttt{FileWriteScopeHook} 限制文件写入边界, \texttt{ToolLoopGuardHook} 阻断重复工具调用, 使 Agent 可在真实工作区内受控执行
+        \item \textbf{可观测与复盘}: 将 trace 作为一等产物, 每次运行自动产出 \texttt{trace.jsonl} / \texttt{metrics.json} / \texttt{report.json}, 聚合执行路径、失败分类、token 与耗时指标, 并可选索引至 PostgreSQL, 支持从最终回答反查完整决策链路
+        \item \textbf{Context 与记忆工程}: 实现 section budget、对话摘要、active-turn 压缩、emergency trim 等 token 预算治理策略, 并设计"候选 → 晋升 → 归档"三级记忆生命周期, 结合向量召回按需注入历史经验, 降低长会话上下文成本
+        \item \textbf{技术栈}: Python, asyncio, OpenAI-compatible SDK, 多 Provider 路由池, PostgreSQL (psycopg3), SQLite, Pydantic v2, Docker, pytest
+    \end{itemize}
+
+    \item \textbf{多层编排 Coding Agent：面向真实仓库修改与验证的垂直任务系统} \hfill 20XX.X --- 20XX.X
+    \begin{itemize}
+        \item \textbf{项目概述}: 基于自研 Runtime 构建面向真实代码任务的多 Agent 协作系统, 围绕"理解需求 → 定位代码 → 修改实现 → 运行验证 → 归纳经验"形成闭环, 并接入 benchmark harness 对能力做持续回归评测
+        \item \textbf{三级 Agent 编排}: 构建 Lead → Teammate → Subagent 三层结构, 复用同一套 reasoning/tool 执行内核; \textbf{Teammate} 以后台线程长驻, 通过消息总线与 task board 自动认领任务并进行角色化协作; \textbf{Subagent} 面向短命子任务, 关闭记忆写入并按 \texttt{agent\_type} 下发工具白名单, 实现强隔离与最小权限
+        \item \textbf{任务隔离与可审计}: coding 请求进入独立 task session 并绑定真实代码仓库, 执行前后记录 \texttt{workspace\_diff.json}, 避免中间推理和临时修改污染主会话, 也便于复盘每次代码任务的实际变更
+        \item \textbf{经验沉淀}: 任务完成后抽取问题定位、修复策略、验证结果与可复用结论, 进入候选记忆并经筛选后晋升, 让后续相似代码任务可以复用历史经验而不是从零探索
+        \item \textbf{可量化评测}: 接入 SWE-bench 并自研 benchmark harness, 支持 scripted / 真实模型两种运行模式, 自动产出 summary、rows 与可读报告, 用于评估 Coding Agent 在真实 issue 场景下的回归表现
+        \item \textbf{技术栈}: Python, asyncio, threading, Git workspace 隔离, 角色化 Profile, 工具白名单, SWE-bench
+    \end{itemize}
+
+    \item \textbf{代码安全 RAG 系统：面向代码审查与修复建议的安全知识服务} \hfill 20XX.X --- 20XX.X
+    \begin{itemize}
+        \item \textbf{项目概述}: 独立构建面向 Coding Agent 的安全知识检索增强系统, 重点回答"这段代码是否存在安全风险、风险依据是什么、应该如何修复"等问题, 为代码修改过程提供可追溯的安全上下文
+        \item \textbf{知识库构建}: 解析安全公告与 Semgrep SAST 规则, 对漏洞描述、触发模式、修复建议等内容做语义切片后写入 Qdrant, 支持增量更新与后续检索质量评估
+        \item \textbf{混合检索与重排}: 基于 BGE embedding 做向量召回, 结合 reranker 对候选证据精排; 引入 LLM 路由分类器判断本轮 query 是否需要安全知识, 非安全类问题不注入安全上下文, 减少无关信息对 Coding Agent 推理的干扰
+        \item \textbf{双接入与可观测}: 同时支持自动上下文注入与 \texttt{security\_rag\_search} 工具显式检索, 让 Agent 可在需要查证时主动调用; 检索路由、命中文档与注入结果写入 trace, 便于评估召回质量和定位错误来源
+        \item \textbf{技术栈}: Python, Qdrant, fastembed, FlagEmbedding (BGE embedding + reranker), 混合检索, 语义切片
+    \end{itemize}
+\end{itemize}

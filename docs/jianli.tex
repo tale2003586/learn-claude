@@ -1,0 +1,172 @@
+%%
+%% Copyright (c) 2018-2020 Weitian LI <wt@liwt.net>
+%% CC BY 4.0 License
+%%
+%% Created: 2018-04-11
+%%
+
+% Chinese version
+\documentclass[zh]{resume}
+
+% File information shown at the footer of the last page
+\fileinfo{%
+  \faCopyright{} 2025--2026, 贺荣奇 \hspace{0.5em}
+  \creativecommons{by}{4.0} \hspace{0.5em}
+  \githublink{adonogwanai}{LLM-Resume-Template} \hspace{0.5em}
+  \faEdit{} \today
+}
+
+\name{玩AI}{阿东}
+
+\keywords{大模型应用, LLM Agent, Agent Runtime, RAG, 工具治理, 多 Agent 编排, Python}
+
+% \tagline{\texorpdfstring{\icon{\faBinoculars} }{}<position-to-look-for>}
+% \tagline{<current-position>}
+
+% \photo[
+%   shape=<circular|square>,    % default is circular
+%   position=<left|right>,      % default is left
+% ]{<width>}{<filename>}
+% Example:
+% \photo[shape=square]{5.5em}{photo}
+
+\profile{
+  \mobile{138-0000-0000}
+  \email{adong@tsinghua.edu.cn}
+  \university{清华大学}
+  \degree{计算机科学与技术 \textbullet 硕士}
+  \birthday{1998-06}
+  % Custom information:
+  % \icontext{<icon>}{<text>}
+  % \iconlink{<icon>}{<link>}{<text>}
+}
+
+\begin{document}
+\makeheader
+
+%======================================================================
+% Summary & Objectives
+%======================================================================
+\begin{abstract}
+清华大学计算机科学与技术专业硕士在读，预计 2026 年 6 月毕业。主攻大模型方向，在模型压缩与微调方面有深入研究和丰富实践。具备头部科技公司大模型算法实习经验，熟悉 LLaMA 架构、提示工程及性能优化。科研方面，以一作身份在 NeurIPS 发表论文，专注模型压缩与知识蒸馏。技术实践能力强，曾获 Kaggle 大模型微调比赛金牌，熟悉 PyTorch、DeepSpeed 及 Hugging Face Transformers 等开发框架与工具。
+\end{abstract}
+
+%======================================================================
+\sectionTitle{专业技能}{\faWrench}
+%======================================================================
+\begin{itemize}
+    \item 熟悉 Python 及 PyTorch 框架，掌握 Hugging Face Transformers 等大模型开发工具。
+    \item 深入理解大模型微调技术，如 P-tuning、LoRA 等，并有丰富的提示工程实践经验。
+    \item 熟悉 LLaMA 等主流模型架构，以及 RLHF、DPO 等偏好对齐方法。
+    \item 掌握基于知识蒸馏的模型压缩方法，对大模型轻量化有深入研究。
+    \item 熟悉 DeepSpeed 等分布式训练框架，具备大模型训练与部署性能优化能力。
+    \item 了解 RAG、Agent 等 LLM 应用技术，对多模态大模型有研究与实践经验。
+\end{itemize}
+
+%======================================================================
+\sectionTitle{教育背景}{\faGraduationCap}
+%======================================================================
+\begin{educations}
+  \education%
+    {2023.09}%
+    [2026.06 (预计)]%
+    {清华大学}%
+    {计算机学院}%
+    {计算机科学与技术}%
+    {硕士 \quad 专业排名前 5\%}
+  \separator{0.5ex}
+  \education%
+    {2019.09}%
+    [2023.06]%
+    {清华大学}%
+    {计算机系}%
+    {计算机科学与技术}%
+    {学士}
+\end{educations}
+
+%======================================================================
+\sectionTitle{科研经历}{\faAtom}
+%======================================================================
+\begin{itemize}
+    \item \textbf{基于强化学习的自主决策 Agent 系统研究} \hfill 20XX.X --- 至今
+    \begin{itemize}
+        \item \textbf{问题背景}: 现有 LLM-based Agent 在复杂任务中存在决策路径冗余、缺乏长期规划能力等问题, 在多步骤任务中难以做出最优决策序列
+        \item \textbf{研究内容}: 1) 提出基于 PPO 的 Agent 决策优化框架, 将 LLM 作为策略网络, 通过任务完成度、步骤效率等构建奖励函数, 实现端到端强化学习训练; 在 ALFWorld、WebShop 等 Benchmark 上验证, 对比 ReAct、Reflexion 等基线方法, 任务成功率提升 XX\%~XX\%, 平均决策步数减少 XX\%
+        \item 2) 设计分层强化学习架构, 将复杂任务分解为高层规划和低层执行两个层次; 通过 Hindsight Experience Replay (HER) 提升样本利用效率, 在稀疏奖励环境下收敛速度提升 XX\%
+        \item 3) 引入 Monte Carlo Tree Search (MCTS) 与 RL 结合的混合决策机制, 在决策前进行多步模拟, 优化探索-利用平衡; 在长序列任务中, 相比纯 RL 方法, 样本效率提升 XX\%, 最终性能提升 XX\%
+        \item \textbf{相关成果}: 第一作者论文已投稿 NeurIPS/ICML 20XX, 目前处于 Under Review 状态; 开源代码在 GitHub 获得 XXX+ stars
+    \end{itemize}
+    
+    \item \textbf{大模型知识蒸馏与模型压缩技术研究} \hfill 20XX.X --- 20XX.X
+    \begin{itemize}
+        \item \textbf{问题背景}: 大规模语言模型部署成本高昂, 在边缘设备和实时应用场景下难以满足推理延迟要求
+        \item \textbf{研究内容}: 1) 提出基于层级知识蒸馏的模型压缩方法, 同时对齐 Teacher 和 Student 模型的注意力分布、隐层特征和输出概率分布, 在保持 XX\% 性能的前提下, 将 LLaMA-13B 压缩至 XB 参数量; 2) 结合结构化剪枝和低秩分解技术, 设计自适应剪枝策略, 在 MMLU、GSM8K 等 Benchmark 上, 相比标准蒸馏方法, 平均性能提升 X.X\%
+        \item \textbf{相关成果}: 第一作者论文发表于 NeurIPS/ICML/ICLR 20XX (CCF-A), 论文被引用 XX 次
+    \end{itemize}
+\end{itemize}
+
+%======================================================================
+\sectionTitle{实习经历}{\faBriefcase}
+%======================================================================
+\begin{experiences}
+  \experience%
+    [20XX.X]%
+    {20XX.X}%
+    {字节跳动/腾讯/阿里巴巴 \quad AI Lab \quad 大模型算法实习生}%
+    [\begin{itemize}
+      \item \textbf{负责部分}: 参与 XXXX 大模型训练过程, 负责 XXXX 数据构造与模型微调, 负责 XXXX 模块开发与性能优化
+      \item \textbf{实习内容1}: 根据 XXXX 业务场景（如代码生成/数学推理/对话等）, 挖掘模型能力短板, 构造高质量训练数据 XX B tokens, 进行持续预训练/SFT训练, 在 HumanEval/MATH/MMLU 等 benchmark 消融实验中, 稳定提升平均得分 X~Xpp
+      \item \textbf{实习内容2}: 针对模型在 XXXX 场景存在的 XX 问题（如指令遵循/多轮对话/工具调用等）, 依据业务流程, 收集和构造 XXXX 数据集, 设计 XXXX 训练策略（如多任务学习/DPO/RLHF等）, 基于 LLaMA/Qwen 等模型进行训练, 最终在内部 benchmark 上平均得分继续提升 Xpp, XXXX 指标达到 XX\%
+      \item \textbf{实习内容3}: 负责模型推理性能优化, 发现 XXXX 问题（如延迟高/显存占用大等）, 采用 XXXX 优化方法（如KV Cache优化/量化/算子融合等）, 基于 vLLM/TensorRT 等框架, 进行推理加速优化, 推理延迟降低 XX\%, QPS提升 XX\%, 同时研究模型压缩方法, 最终在保持性能前提下显存占用降低 XX\%
+    \end{itemize}]
+\end{experiences}
+
+%======================================================================
+\sectionTitle{项目经历}{\faCode}
+%======================================================================
+\begin{itemize}
+    \item \textbf{多入口 LLM Agent Runtime（自研 Agent 执行引擎，非 LangChain 封装）} \hfill 20XX.X --- 至今
+    \begin{itemize}
+        \item \textbf{项目背景}: 主流 Agent 多为框架封装, 工具执行不受控、行为难复盘。从零自建一套以消息与会话为边界的 Agent 执行引擎, 作为上层 Coding Agent 与 RAG 系统的公共地基, 核心代码约 36K 行, 配套 49 套 pytest 用例
+        \item \textbf{统一入口与依赖装配}: 将 CLI / Web / Telegram / 飞书四类入口归一为 inbound/outbound 消息抽象, 通过 \texttt{build\_runtime} 一处装配消息总线、会话管理、模型池、工具执行器、记忆生命周期、trace store 等 14+ 组件, 实现控制面/能力面/证据面三层解耦
+        \item \textbf{工具治理护栏}: 模型只能"请求"工具而非直接执行, 经"注册 → 按模式可见 → 延迟解锁 → Hook 改写/拒绝 → 循环保护"五道关卡; 通过 FileWriteScopeHook 限制文件写入范围、ToolLoopGuardHook 阻断工具死循环, 保证 Agent 在真实环境的执行安全
+        \item \textbf{可观测性作为一等产物}: 每次运行落 trace.jsonl / metrics.json / report.json, 聚合执行路径、失败分类、token 与耗时指标, 可选索引至 PostgreSQL, 支持 Agent 行为事后复盘而非只看最终回答
+        \item \textbf{Context 与记忆工程}: 实现 token 预算治理（section budget、对话摘要、active-turn 压缩、emergency trim）与三级记忆生命周期（候选 → 晋升 → 归档）, 结合向量召回做按需记忆注入, 降低长会话 token 成本
+        \item \textbf{技术栈}: Python, asyncio, OpenAI-compatible SDK, 多 Provider 路由池, PostgreSQL (psycopg3), SQLite, Pydantic v2, Docker, pytest
+    \end{itemize}
+
+    \item \textbf{多层编排的 Coding Agent（依托 Runtime 的垂直任务系统）} \hfill 20XX.X --- 20XX.X
+    \begin{itemize}
+        \item \textbf{项目背景}: 在 Agent Runtime 之上构建面向真实代码任务的多 Agent 协作模式, 解决"理解—修改—验证"的垂直闭环, 并提供可量化的能力评测
+        \item \textbf{三级 Agent 编排}: 构建 Lead → Teammate → Subagent 三层结构, 共享同一套 reasoning/tool 执行内核; \textbf{Teammate} 以后台线程长驻, 通过消息总线与任务板（task board）自动认领任务, 做角色化持续协作; \textbf{Subagent} 为短命一次性子任务, 关闭记忆写入、按 agent\_type 下发工具白名单并收紧推理步数上限, 实现强隔离与最小权限
+        \item \textbf{任务隔离与可审计}: coding 请求进入独立 task session 并绑定真实代码仓库, 记录执行前后 workspace\_diff.json, 避免中间步骤污染主会话, 结果可审计
+        \item \textbf{经验沉淀}: 任务完成后做结论抽取与可晋升记忆筛选, 把有价值的解决方案回写记忆系统供后续任务复用
+        \item \textbf{可量化评测}: 接入 SWE-bench 并自研 benchmark harness, 支持 scripted / 真实模型两种模式, 自动产出 summary、rows 与可读报告, 对 Coding Agent 做回归评测
+        \item \textbf{技术栈}: Python, asyncio (并行子任务), Git workspace 隔离, 角色化 Profile, 工具白名单, SWE-bench
+    \end{itemize}
+
+    \item \textbf{代码安全 RAG 系统（为 Coding 过程供血的知识服务）} \hfill 20XX.X --- 20XX.X
+    \begin{itemize}
+        \item \textbf{项目背景}: 为回答 Coding Agent 执行中"这段代码安不安全、该怎么改"的疑问, 独立构建一套代码安全检索增强系统
+        \item \textbf{知识库构建}: 解析安全公告与 Semgrep SAST 规则, 做语义切片后入库 Qdrant, 支持增量更新
+        \item \textbf{混合检索与重排}: 基于 BGE embedding 做向量召回并接 reranker 精排; 引入 LLM 路由分类器判断本轮 query 是否需要安全知识, 非安全问题不注入安全上下文, 避免无关信息污染
+        \item \textbf{双接入方式}: 支持自动上下文注入与 security\_rag\_search 工具显式检索, 让 Coding Agent 在执行中按需查证; 检索路由与命中结果落 trace, 便于评估召回质量
+        \item \textbf{技术栈}: Python, Qdrant, fastembed, FlagEmbedding (BGE embedding + reranker), 混合检索, 语义切片
+    \end{itemize}
+\end{itemize}
+
+%======================================================================
+\sectionTitle{个人荣誉}{\faTrophy}
+%======================================================================
+\begin{itemize}
+    \item NeurIPS/ICML/ICLR 20XX 第一作者论文 (CCF-A 类会议), 研究方向: XXXX
+    \item Kaggle XXXX Competition 金牌/银牌 (Top X\%, XX/XXXX)
+    \item 天池/DataFountain XXXX Challenge 第一名/Top X
+    \item 清华大学/北京大学 20XX 年度学业优秀奖学金（一等）、优秀研究生
+    \item 20XX 年度国家奖学金
+    \item 中国大学生程序设计竞赛 (CCPC) / ACM-ICPC 全国金奖/银奖/铜奖
+    \item 美国大学生数学建模竞赛 (MCM/ICM) Outstanding/Meritorious Winner
+    \item GitHub 开源项目 "XXXX" 获得 XXX+ stars
+\end{itemize}
+
+\end{document}
